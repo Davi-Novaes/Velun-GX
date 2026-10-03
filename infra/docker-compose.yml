@@ -1,0 +1,248 @@
+# Ambiente local (desenvolvimento). Uso, a partir da raiz do repositório:
+#   powershell -File infra/scripts/init-env.ps1     (uma vez: gera infra/.env com segredos aleatórios)
+#   docker compose -f infra/docker-compose.yml up -d --build
+name: screenshare
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+services:
+  traefik:
+    image: traefik:v3.7.13
+    restart: unless-stopped
+    command: ["--configFile=/etc/traefik/traefik.yml"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - ./certs:/certs:ro
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks: [app]
+    logging: *logging
+
+  backend:
+    build: ../backend
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+      ConnectionStrings__Postgres: Host=postgres;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD};GSS Encryption Mode=Disable
+      ConnectionStrings__Redis: redis:6379,password=${REDIS_PASSWORD}
+      LiveKit__ApiUrl: http://livekit:7880
+      LiveKit__PublicUrl: ${LIVEKIT_PUBLIC_URL:-}
+      LiveKit__ApiKey: ${LIVEKIT_API_KEY:?defina LIVEKIT_API_KEY em infra/.env}
+      LiveKit__ApiSecret: ${LIVEKIT_API_SECRET:?defina LIVEKIT_API_SECRET em infra/.env}
+      Session__SigningKey: ${SESSION_SIGNING_KEY:?defina SESSION_SIGNING_KEY em infra/.env}
+      # dev roda em HTTP; em produção (HTTPS) o cookie é sempre Secure
+      Session__SecureCookie: ${SESSION_SECURE_COOKIE:-false}
+      Database__MigrateOnStartup: "true"
+      Account__KeysPath: /var/lib/screenshare/keys
+      # só o Traefik (rede interna) pode informar o IP real do cliente
+      ReverseProxy__TrustedNetworks__0: 172.30.0.0/24
+      # limites por IP (padrão = produção). Testes automatizados e de carga saem todos do mesmo IP: aumente no .env
+      RateLimits__sessions__Limit: ${RATE_LIMIT_SESSIONS_PER_MIN:-10}
+      RateLimits__rooms-create-ip__Limit: ${RATE_LIMIT_ROOMS_PER_HOUR_PER_IP:-30}
+      RateLimits__rooms-get__Limit: ${RATE_LIMIT_ROOM_LOOKUPS_PER_MIN:-60}
+    volumes:
+      - accountkeys:/var/lib/screenshare/keys
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    labels:
+      traefik.enable: "true"
+      # webhooks do SFU chegam pela rede interna; não ficam expostos no proxy
+      traefik.http.routers.api.rule: PathPrefix(`/api`) && !PathPrefix(`/api/v1/webhooks`)
+      traefik.http.routers.api.entrypoints: web,websecure
+      traefik.http.services.api.loadbalancer.server.port: "8080"
+    networks: [app]
+    logging: *logging
+
+  frontend:
+    build: ../frontend
+    restart: unless-stopped
+    volumes:
+      # instalador do Velun Gx (desktop/ -> npm run dist); fora da imagem para não pesar a cada deploy
+      - ./downloads:/usr/share/nginx/downloads:ro
+    labels:
+      traefik.enable: "true"
+      # prioridade mínima: /api e /rtc (regras mais específicas) vencem
+      traefik.http.routers.web.rule: PathPrefix(`/`)
+      traefik.http.routers.web.priority: "1"
+      traefik.http.routers.web.entrypoints: web,websecure
+      traefik.http.services.web.loadbalancer.server.port: "8080"
+    networks: [app]
+    logging: *logging
+
+  postgres:
+    image: postgres:18.6-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD em infra/.env}
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [app]
+    logging: *logging
+
+  redis:
+    image: redis:8.10.2-alpine
+    restart: unless-stopped
+    # estado efêmero (roteamento do SFU, rate limit, locks): sem persistência em disco
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?defina REDIS_PASSWORD em infra/.env}",
+              "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    networks: [app]
+    logging: *logging
+
+  livekit:
+    image: livekit/livekit-server:v1.13.7
+    restart: unless-stopped
+    command: ["--config", "/etc/livekit.yaml"]
+    configs:
+      - source: livekit_config
+        target: /etc/livekit.yaml
+    ports:
+      - "7881:7881/tcp"                         # ICE/TCP (quando UDP está bloqueado)
+      - "${LIVEKIT_UDP_PORT}:${LIVEKIT_UDP_PORT}/udp"   # mídia WebRTC (UDP mux: uma porta para todos)
+      - "127.0.0.1:7880:7880/tcp"               # API/sinalização só para a máquina local (testes); navegador usa /rtc via Traefik
+    depends_on:
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:7880/"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.sfu.rule: PathPrefix(`/rtc`)
+      traefik.http.routers.sfu.entrypoints: web,websecure
+      traefik.http.services.sfu.loadbalancer.server.port: "7880"
+    networks:
+      app:
+        ipv4_address: ${SFU_INTERNAL_IP:-172.30.0.10}
+    logging: *logging
+
+  coturn:
+    image: coturn/coturn:4.18.0-alpine
+    restart: unless-stopped
+    command:
+      - "-c"
+      - "/etc/coturn/turnserver.conf"
+      - "--static-auth-secret=${TURN_SECRET:?defina TURN_SECRET em infra/.env}"
+      - "--external-ip=${TURN_EXTERNAL_IP}"
+      # o relay só pode alcançar o SFU (pelo IP interno); as demais faixas privadas ficam bloqueadas no turnserver.conf
+      - "--allowed-peer-ip=${SFU_INTERNAL_IP:-172.30.0.10}"
+      - "--min-port=${TURN_RELAY_PORT_START}"
+      - "--max-port=${TURN_RELAY_PORT_END}"
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+      - "${TURN_RELAY_PORT_START}-${TURN_RELAY_PORT_END}:${TURN_RELAY_PORT_START}-${TURN_RELAY_PORT_END}/udp"
+    volumes:
+      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "3478"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks: [app]
+    logging: *logging
+
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    restart: unless-stopped
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=7d"]
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    networks: [app]
+    logging: *logging
+
+configs:
+  # O LiveKit não interpola variáveis no YAML; o Compose faz isso aqui, e os segredos ficam só no .env.
+  livekit_config:
+    content: |
+      port: 7880
+      logging:
+        json: true
+        level: info
+      rtc:
+        udp_port: ${LIVEKIT_UDP_PORT}
+        tcp_port: 7881
+        use_external_ip: ${LIVEKIT_USE_EXTERNAL_IP:-false}
+        node_ip: ${LIVEKIT_NODE_IP:?defina LIVEKIT_NODE_IP em infra/.env}
+        # também anuncia o IP interno: é por ele que o relay do coturn chega ao SFU
+        advertise_internal_ip: true
+        stun_servers:
+          - ${TURN_HOST}:3478
+        turn_servers:
+          - host: ${TURN_HOST}
+            port: 3478
+            protocol: udp
+            secret: ${TURN_SECRET}
+            ttl: 3600
+          - host: ${TURN_HOST}
+            port: 3478
+            protocol: tcp
+            secret: ${TURN_SECRET}
+            ttl: 3600
+        congestion_control:
+          enabled: true
+          allow_pause: true
+      redis:
+        address: redis:6379
+        password: ${REDIS_PASSWORD}
+      keys:
+        ${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}
+      room:
+        # só o backend cria salas; token para sala inexistente é recusado
+        auto_create: false
+        max_participants: 20
+        empty_timeout: 300
+        departure_timeout: 20
+        enabled_codecs:
+          - mime: video/vp8
+          - mime: video/h264
+          - mime: video/vp9
+          - mime: video/av1
+          - mime: audio/opus
+          - mime: audio/red
+      webhook:
+        api_key: ${LIVEKIT_API_KEY}
+        urls:
+          - http://backend:8080/api/v1/webhooks/livekit
+      prometheus:
+        port: 6789
+
+networks:
+  app:
+    name: screenshare_app
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  accountkeys:
+  pgdata:
+  promdata:

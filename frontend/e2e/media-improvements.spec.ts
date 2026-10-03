@@ -1,0 +1,77 @@
+import { expect, test } from '@playwright/test'
+import { closeBrowsers, expectVideoFlowing, instrumentDisplayCapture, person, type Person } from './support'
+
+test.afterEach(closeBrowsers)
+async function api(p: Person, path: string, method = 'GET', body?: unknown) {
+  const headers: Record<string, string> = {}
+  if (method !== 'GET') headers['X-CSRF-Token'] = (await (await p.context.request.get('/api/v1/auth/csrf')).json()).token
+  const r = await p.context.request.fetch(`/api/v1${path}`, { method, headers, data: body })
+  expect(r.ok(), `${method} ${path}: ${r.status()}`).toBe(true)
+  return r.status() === 204 ? undefined : r.json()
+}
+test('áudio, mute, volume, qualidade real e telemetria persistem em grade, destaque e mobile', async ({ baseURL }) => {
+  test.setTimeout(180000)
+  const a = await person('Emissor', 'chromium', baseURL!)
+  const b = await person('Espectador', 'chromium', baseURL!)
+  a.page.setDefaultTimeout(15000)
+  b.page.setDefaultTimeout(15000)
+  const suffix = Date.now()
+  const names = [`Miguel_${suffix}`, `Luana_${suffix}`]
+  for (const [i, p] of [a, b].entries()) {
+    await instrumentDisplayCapture(p)
+    await api(p, '/auth/register', 'POST', { username: names[i], password: 'nova-interface-2026', confirmPassword: 'nova-interface-2026' })
+  }
+  const server = await api(a, '/servers', 'POST', { name: 'Nosso ponto de encontro' })
+  try {
+    const invite = await api(a, `/servers/${server.id}/invites`, 'POST', {})
+    await api(b, `/invites/${invite.code}/accept`, 'POST')
+    for (const p of [a, b]) { await p.page.goto(`/app/${server.id}`); await p.page.getByRole('button', { name: /#\s*Geral/ }).click(); await expect(p.page.getByRole('button', { name: 'Compartilhar tela', exact: true })).toBeEnabled() }
+    await a.page.getByRole('button', { name: 'Compartilhar tela', exact: true }).click()
+    await a.page.getByLabel('Compartilhar áudio', { exact: true }).check()
+    await a.page.getByLabel('Origem do áudio').selectOption('system')
+    await a.page.getByLabel('Resolução', { exact: true }).selectOption('1080p')
+    await a.page.getByLabel('FPS', { exact: true }).selectOption('30')
+    await a.page.getByRole('button', { name: 'Começar transmissão' }).click()
+    await expectVideoFlowing(b, `Tela de ${names[0]}`)
+    const sound = b.page.getByLabel(`Áudio de ${names[0]}`, { exact: true })
+    await expect.poll(() => sound.evaluate((a: HTMLAudioElement) => a.currentTime)).toBeGreaterThan(0.5)
+    await b.page.getByRole('button', { name: `Silenciar de ${names[0]}`, exact: true }).click()
+    await expect.poll(() => sound.evaluate((a: HTMLAudioElement) => a.muted)).toBe(true)
+    await b.page.getByRole('button', { name: 'Visualização em destaque' }).click()
+    await expect(sound).toHaveCount(1)
+    await expect.poll(() => sound.evaluate((a: HTMLAudioElement) => a.muted)).toBe(true)
+    await b.page.getByRole('button', { name: `Ativar som de ${names[0]}`, exact: true }).click()
+    await b.page.getByLabel(`Volume de ${names[0]}`).fill('25')
+    await expect.poll(() => sound.evaluate((a: HTMLAudioElement) => a.volume)).toBe(0.25)
+    await expect(b.page.locator('.stream-quality-badge').first()).toContainText('1080p · 30 FPS')
+    await a.page.locator('.primary-controls').getByRole('button', { name: 'Qualidade', exact: true }).click()
+    await a.page.getByLabel('Resolução', { exact: true }).selectOption('720p')
+    await a.page.getByLabel('FPS', { exact: true }).selectOption('15')
+    await a.page.getByRole('button', { name: 'Aplicar qualidade' }).click()
+    await expect(b.page.locator('.stream-quality-badge').first()).toContainText('720p · 15 FPS')
+    await expect(a.page.locator('.preview-footer')).toContainText('1280 × 720')
+    await expect.poll(() => b.page.getByLabel(`Tela de ${names[0]}`, { exact: true }).evaluate((v: HTMLVideoElement) => v.videoHeight)).toBeLessThanOrEqual(720)
+    await a.page.getByRole('button', { name: 'Desativar áudio', exact: true }).click()
+    await expect(b.page.locator('.stream-audio-controls')).toContainText('Emissor sem som')
+    await a.page.locator('.primary-controls').getByRole('button', { name: 'Ativar áudio', exact: true }).click()
+    await a.page.getByRole('button', { name: 'Trocar tela/janela', exact: true }).click()
+    await expect.poll(() => a.page.evaluate(() => (window as unknown as { __captures: MediaStream[] }).__captures.length)).toBe(2)
+    await expect.poll(() => sound.evaluate((a: HTMLAudioElement) => a.currentTime)).toBeGreaterThan(0.5)
+    await b.page.getByRole('button', { name: `Qualidade de ${names[0]}` }).click()
+    await expect(b.page.getByRole('region', { name: `Diagnóstico de ${names[0]}` })).toContainText('720p · 15 FPS')
+    await expect(b.page.getByRole('region', { name: `Diagnóstico de ${names[0]}` })).toContainText('1280 × 720')
+    await b.page.getByRole('button', { name: 'Fechar informações' }).click()
+    await b.page.screenshot({ path: 'ui-redesign-desktop.png' })
+    await b.page.setViewportSize({ width: 390, height: 844 })
+    await b.page.getByRole('button', { name: 'Voltar para grade' }).click()
+    await expectVideoFlowing(b, `Tela de ${names[0]}`)
+    expect(await b.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await b.page.screenshot({ path: 'ui-redesign-mobile.png' })
+    await b.page.getByRole('button', { name: 'Não assistir' }).click()
+    await expect(sound).toHaveCount(0)
+    await b.page.getByRole('button', { name: 'Ver todas' }).click()
+    await expectVideoFlowing(b, `Tela de ${names[0]}`)
+    await expect(sound).toHaveCount(1)
+    await expect.poll(() => sound.evaluate((a: HTMLAudioElement) => a.volume)).toBe(0.25)
+  } finally { await api(a, `/servers/${server.id}`, 'DELETE') }
+})

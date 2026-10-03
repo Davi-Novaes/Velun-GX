@@ -1,0 +1,12 @@
+# Sobreposição para servidor. Uso:
+#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml up -d --build
+services:
+  traefik:
+    volumes:
+      # substitui a configuração de desenvolvimento: HTTP passa a redirecionar para HTTPS
+      - ./traefik/traefik.prod.yml:/etc/traefik/traefik.yml:ro
+
+  backend:
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Session__SecureCookie: "true"

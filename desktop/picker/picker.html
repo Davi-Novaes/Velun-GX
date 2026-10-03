@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'self'; script-src 'self'">
+<title>Velun Gx — Escolha o que transmitir</title>
+<link rel="stylesheet" href="picker.css">
+</head>
+<body>
+<header>
+  <h1>Escolha o que transmitir</h1>
+  <div class="tabs" role="tablist">
+    <button role="tab" id="tab-screen" aria-selected="true">Telas</button>
+    <button role="tab" id="tab-window" aria-selected="false">Janelas</button>
+  </div>
+</header>
+<main id="grid" role="listbox" aria-label="Fontes disponíveis"><p class="empty">Carregando…</p></main>
+<footer>
+  <p class="hint" id="hint"></p>
+  <div class="actions">
+    <button id="cancel" class="secondary">Cancelar</button>
+    <button id="go" class="primary" disabled>Transmitir</button>
+  </div>
+</footer>
+<script src="picker.js"></script>
+</body>
+</html>

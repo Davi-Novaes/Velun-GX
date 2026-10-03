@@ -1,0 +1,6 @@
+root = false
+
+# migrations do EF Core são geradas automaticamente
+[**/Migrations/*.cs]
+generated_code = true
+dotnet_analyzer_diagnostic.severity = none

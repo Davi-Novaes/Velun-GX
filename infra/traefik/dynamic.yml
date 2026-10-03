@@ -1,0 +1,10 @@
+# Certificado padrão do HTTPS de desenvolvimento (infra/scripts/dev-cert.ps1).
+tls:
+  options:
+    default:
+      minVersion: VersionTLS12
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /certs/dev-cert.pem
+        keyFile: /certs/dev-key.pem

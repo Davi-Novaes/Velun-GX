@@ -1,0 +1,36 @@
+# segredos
+.env
+infra/certs/*
+!infra/certs/.gitkeep
+
+# .NET
+bin/
+obj/
+*.user
+.vs/
+TestResults/
+
+# Node
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+.deploy/
+ui-workspace-*.png
+
+# SO / editores
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Velun Gx (app desktop)
+desktop/dist-native/
+desktop/node_modules/
+desktop/out/
+infra/downloads/*
+!infra/downloads/.gitkeep
+desktop/release/
+desktop/release-test/

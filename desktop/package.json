@@ -1,0 +1,70 @@
+{
+  "name": "velun-gx",
+  "productName": "Velun Gx",
+  "version": "0.2.3",
+  "description": "Velun Gx: transmissão de tela com som do PC sem a call do Discord",
+  "private": true,
+  "main": "out/main.js",
+  "scripts": {
+    "native": "dotnet publish native/VelunAudio -c Release -o dist-native",
+    "build": "tsc -p tsconfig.json",
+    "start": "npm run build && electron .",
+    "dist": "npm run native && npm run build && electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "electron": "44.5.1",
+    "electron-builder": "26.15.3",
+    "typescript": "7.0.2"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
+  "author": "Velun Gx",
+  "build": {
+    "appId": "gx.velun.app",
+    "productName": "Velun Gx",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "picker/**/*",
+      "build/icon.png",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "dist-native/VelunAudio.exe",
+        "to": "VelunAudio.exe"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "VelunGx-Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false,
+      "shortcutName": "Velun Gx",
+      "uninstallDisplayName": "Velun Gx",
+      "createDesktopShortcut": "always"
+    },
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://discordmeet.ddns.net:8443/downloads/"
+      }
+    ]
+  }
+}

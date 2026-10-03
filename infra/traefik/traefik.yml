@@ -1,0 +1,32 @@
+# Configuração estática do Traefik (desenvolvimento local).
+# web (:80) e websecure (:443) servem as mesmas rotas. O HTTPS de dev usa o certificado de infra/certs
+# (gerado por infra/scripts/dev-cert.ps1); sem ele, o Traefik usa o próprio certificado autoassinado.
+# Produção: só websecure, Let's Encrypt e redirecionamento 80 → 443 (override de produção).
+entryPoints:
+  web:
+    address: ":80"
+  websecure:
+    address: ":443"
+    http:
+      tls: {}
+
+providers:
+  docker:
+    exposedByDefault: false
+    network: screenshare_app
+  file:
+    filename: /etc/traefik/dynamic.yml
+
+ping: {}
+
+api:
+  dashboard: false
+
+log:
+  level: INFO
+  format: json
+
+accessLog:
+  format: json
+  filters:
+    statusCodes: ["400-599"]

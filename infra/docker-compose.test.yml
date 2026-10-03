@@ -1,0 +1,8 @@
+# Somente para testes locais repetitivos. Nunca aplicar ao servidor público.
+services:
+  backend:
+    environment:
+      RateLimits__auth-register__Limit: "100000"
+      RateLimits__auth-login__Limit: "100000"
+      RateLimits__community-write__Limit: "100000"
+      RateLimits__rooms-get__Limit: "100000"
