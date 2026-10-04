@@ -73,8 +73,25 @@ try
         options.Events.OnRedirectToLogin = context => { context.Response.StatusCode = 401; return Task.CompletedTask; };
         options.Events.OnRedirectToAccessDenied = context => { context.Response.StatusCode = 403; return Task.CompletedTask; };
     });
-    builder.Services.AddAuthorization(options => options.AddPolicy(AccountAuthentication.Policy, policy =>
-        policy.AddAuthenticationSchemes(AccountAuthentication.Scheme).RequireAuthenticatedUser()));
+    // Painel de administração: login próprio (não é uma conta do site), cookie só para /api/v1/admin
+    builder.Services.AddAuthentication().AddCookie(AdminAuthentication.Scheme, options =>
+    {
+        options.Cookie.Name = "ss_admin";
+        options.Cookie.HttpOnly = true;
+        options.Cookie.Path = AdminAuthentication.CookiePath;
+        options.Cookie.SameSite = SameSiteMode.Strict;
+        options.Cookie.SecurePolicy = secureCookies ? CookieSecurePolicy.Always : CookieSecurePolicy.None;
+        options.ExpireTimeSpan = AdminAuthentication.Lifetime;
+        options.SlidingExpiration = true;
+        options.Events.OnValidatePrincipal = AdminAuthentication.ValidateAsync;
+        options.Events.OnRedirectToLogin = context => { context.Response.StatusCode = 401; return Task.CompletedTask; };
+        options.Events.OnRedirectToAccessDenied = context => { context.Response.StatusCode = 403; return Task.CompletedTask; };
+    });
+    builder.Services.AddAuthorization(options =>
+    {
+        options.AddPolicy(AccountAuthentication.Policy, policy => policy.AddAuthenticationSchemes(AccountAuthentication.Scheme).RequireAuthenticatedUser());
+        options.AddPolicy(AdminAuthentication.Policy, policy => policy.AddAuthenticationSchemes(AdminAuthentication.Scheme).RequireAuthenticatedUser());
+    });
     builder.Services.AddAntiforgery(options =>
     {
         options.HeaderName = "X-CSRF-Token";
@@ -118,6 +135,7 @@ try
     api.MapSessionEndpoints();
     api.MapAccountEndpoints();
     api.MapCommunityEndpoints();
+    api.MapAdminEndpoints();
     app.MapHub<PresenceHub>("/api/v1/presence");
     api.MapRoomEndpoints();
     api.MapSfuWebhookEndpoints();

@@ -19,7 +19,9 @@ contextBridge.exposeInMainWorld('velun', {
   update: {
     /** Versão nova já baixada, ou null. */
     status: () => ipcRenderer.invoke('velun:update:status'),
-    onReady: (callback: (update: { version: string }) => void) => subscribe('velun:update-ready', callback),
+    onReady: (callback: (update: { version: string; installing?: boolean }) => void) => subscribe('velun:update-ready', callback),
+    /** A última instalação não concluiu (o app abriu na versão antiga), ou null. */
+    failed: () => ipcRenderer.invoke('velun:update:failed'),
     /** Download em andamento (versão e %), ou null. */
     progress: () => ipcRenderer.invoke('velun:update:progress'),
     onProgress: (callback: (progress: { version: string; percent: number }) => void) => subscribe('velun:update-progress', callback),

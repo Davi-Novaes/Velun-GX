@@ -5,6 +5,7 @@ import { useServices } from '../app/services'
 import '../styles/redesign.css'
 import { DownloadApp } from '../features/desktop/DownloadApp'
 import { NicknameForm } from '../features/workspace/NicknameForm'
+import { PasswordForm } from '../features/workspace/PasswordForm'
 
 export function AuthPage({ register = false }: { register?: boolean }) {
   const { accounts } = useServices()
@@ -25,15 +26,15 @@ export function AuthPage({ register = false }: { register?: boolean }) {
     if (register && password !== confirm) { setError('As senhas não coincidem.'); return }
     setBusy(true)
     try {
-      if (register) await accounts.register(username.trim(), password, confirm)
-      else await accounts.login(username.trim(), password)
+      const profile = register ? await accounts.register(username.trim(), password, confirm) : await accounts.login(username.trim(), password)
       setPassword(''); setConfirm('')
-      navigate(destination, { replace: true })
+      // senha provisória do administrador: primeiro cria a própria senha
+      navigate(profile.mustChangePassword ? '/account' : destination, { replace: true })
     } catch (e) { setError(e instanceof Error ? e.message : 'Não foi possível entrar.'); setBusy(false) }
   }
 
   return <main className="center-page account-page">
-    <section className="account-intro"><Link to="/" className="wordmark">Discord<span className="wordmark-accent">Meet</span></Link><h1>Compartilhe<br />o momento.<br />Juntos, ao vivo.</h1><p className="muted">Suas telas, seus amigos. Um lugar para se encontrar.</p><DownloadApp /></section>
+    <section className="account-intro"><Link to="/" className="wordmark">Velun<span className="wordmark-accent"> Gx</span></Link><h1>Compartilhe<br />o momento.<br />Juntos, ao vivo.</h1><p className="muted">Suas telas, seus amigos. Um lugar para se encontrar.</p><DownloadApp /></section>
     <form className="card account-card" onSubmit={(e) => void submit(e)} aria-labelledby="auth-title">
       <span className="eyebrow">{register ? 'COMECE POR AQUI' : 'BEM-VINDO DE VOLTA'}</span>
       <h2 id="auth-title">{register ? 'Criar conta' : 'Entrar na conta'}</h2>
@@ -74,8 +75,8 @@ export function AccountPage() {
     catch (e) { setError(e instanceof Error ? e.message : 'Não foi possível sair.'); setBusy(false) }
   }
   return <main className="center-page"><section className="card account-card">
-    <span className="eyebrow">TELAJUNTO</span><h1>Sua conta</h1>
-    {profile ? <><div className="account-identity"><span className="participant-avatar">{profile.name.slice(0, 2).toUpperCase()}</span><span>{profile.name}<small className="muted">Conta conectada</small></span></div><p className="muted small">Seus servidores e canais estão vinculados à sua conta.</p><NicknameForm profile={profile} onSaved={setProfile} /><DownloadApp /><div className="actions"><Link className="btn btn-primary" to="/app">Abrir servidores</Link><Link className="btn" to="/legacy">Abrir salas de transmissão</Link><button className="btn" onClick={() => void logout()} disabled={busy}>Sair da conta</button></div></> : !error && <p role="status">Carregando conta…</p>}
+    <span className="eyebrow">VELUN GX</span><h1>Sua conta</h1>
+    {profile ? <><div className="account-identity"><span className="participant-avatar">{profile.name.slice(0, 2).toUpperCase()}</span><span>{profile.name}<small className="muted">Conta conectada</small></span></div>{profile.mustChangePassword ? <PasswordForm required onSaved={(p) => { setProfile(p); navigate('/app', { replace: true }) }} /> : <><p className="muted small">Seus servidores e canais estão vinculados à sua conta.</p><NicknameForm profile={profile} onSaved={setProfile} /><PasswordForm onSaved={setProfile} /></>}<DownloadApp /><div className="actions"><Link className="btn btn-primary" to="/app">Abrir servidores</Link><Link className="btn" to="/legacy">Abrir salas de transmissão</Link><button className="btn" onClick={() => void logout()} disabled={busy}>Sair da conta</button></div></> : !error && <p role="status">Carregando conta…</p>}
     {error && <><p role="alert" className="error-text">{error}</p>{!profile && <button className="btn" onClick={() => setAttempt((n) => n + 1)}>Tentar novamente</button>}</>}
   </section></main>
 }

@@ -1,5 +1,8 @@
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.SignalR;
+using ScreenShare.Api.Presence;
+using ScreenShare.Domain.Communities;
 using ScreenShare.Api.Http;
 using ScreenShare.Api.Security;
 using ScreenShare.Infrastructure.Communities;
@@ -32,6 +35,19 @@ internal static class CommunityEndpoints
         product.MapDelete("/servers/{id:guid}", async (Guid id, HttpContext h, CommunityService s, CancellationToken ct) => { await s.DeleteServerAsync(User(h), id, ct); return Results.NoContent(); });
         product.MapPost("/servers/{id:guid}/leave", async (Guid id, HttpContext h, CommunityService s, CancellationToken ct) => { await s.RemoveMemberAsync(User(h), id, User(h), ct); return Results.NoContent(); });
         product.MapDelete("/servers/{id:guid}/members/{target:guid}", async (Guid id, Guid target, HttpContext h, CommunityService s, CancellationToken ct) => { await s.RemoveMemberAsync(User(h), id, target, ct); return Results.NoContent(); });
+        product.MapPost("/servers/{id:guid}/roles", async (Guid id, RoleBody b, HttpContext h, CommunityService s, CancellationToken ct) => Results.Ok(await s.SaveRoleAsync(User(h), id, null, b.Name, b.Color, b.Position, (ServerAccess)b.Permissions, ct)));
+        product.MapPut("/servers/{id:guid}/roles/{role:guid}", async (Guid id, Guid role, RoleBody b, HttpContext h, CommunityService s, CancellationToken ct) => Results.Ok(await s.SaveRoleAsync(User(h), id, role, b.Name, b.Color, b.Position, (ServerAccess)b.Permissions, ct)));
+        product.MapDelete("/servers/{id:guid}/roles/{role:guid}", async (Guid id, Guid role, HttpContext h, CommunityService s, CancellationToken ct) => { await s.DeleteRoleAsync(User(h), id, role, ct); return Results.NoContent(); });
+        product.MapPut("/servers/{id:guid}/members/{target:guid}/role", async (Guid id, Guid target, AssignRoleBody b, HttpContext h, CommunityService s, CancellationToken ct) => { await s.AssignRoleAsync(User(h), id, target, b.RoleId, ct); return Results.NoContent(); });
+        product.MapPost("/servers/{id:guid}/members/{target:guid}/move", async (Guid id, Guid target, MoveBody b, HttpContext h, CommunityService s, PresenceRegistry registry, IHubContext<PresenceHub> hub, CancellationToken ct) =>
+        {
+            await s.RequirePermissionAsync(User(h), id, b.ChannelId is null ? ServerAccess.DisconnectMembers : ServerAccess.MoveMembers, ct);
+            var connections = registry.Subscriptions.Where(x => x.Value.ServerId == id && x.Value.UserId == target).Select(x => x.Key).ToArray();
+            if (b.ChannelId is not null && connections.Length == 0) throw new CommunityException(409, "O membro precisa estar conectado ao servidor para ser movido.");
+            await s.ModerateChannelAsync(User(h), id, target, b.ChannelId, ct);
+            await hub.Clients.Clients(connections).SendAsync("MemberMoved", id, b.ChannelId, ct);
+            return Results.NoContent();
+        });
         product.MapPost("/servers/{id:guid}/channels", async (Guid id, NameBody b, HttpContext h, CommunityService s, CancellationToken ct) => Results.Ok(await s.CreateChannelAsync(User(h), id, b.Name, ct)));
         product.MapPatch("/channels/{id:guid}", async (Guid id, NameBody b, HttpContext h, CommunityService s, CancellationToken ct) => { await s.RenameChannelAsync(User(h), id, b.Name, ct); return Results.NoContent(); });
         product.MapDelete("/channels/{id:guid}", async (Guid id, HttpContext h, CommunityService s, CancellationToken ct) => { await s.DeleteChannelAsync(User(h), id, ct); return Results.NoContent(); });
@@ -39,7 +55,7 @@ internal static class CommunityEndpoints
         product.MapPost("/servers/{id:guid}/invites", async (Guid id, InviteBody b, HttpContext h, CommunityService s, CancellationToken ct) => Results.Ok(await s.InviteAsync(User(h), id, b.MaxUses, ct))).WithRateLimit("community-write", RateLimitPartition.ClientIp);
         product.MapGet("/servers/{id:guid}/invites", async (Guid id, HttpContext h, CommunityService s, ScreenShare.Infrastructure.Persistence.AppDbContext db, CancellationToken ct) =>
         {
-            await s.AccessAsync(User(h), id, true, ct);
+            await s.RequirePermissionAsync(User(h), id, ServerAccess.Invite, ct);
             return Results.Ok(await db.ServerInvites.Where(i => i.ServerId == id).OrderByDescending(i => i.CreatedAt).Select(i => new { i.Id, i.CreatedAt, i.ExpiresAt, i.RevokedAt, i.Uses, i.MaxUses }).ToListAsync(ct));
         });
         product.MapDelete("/servers/{id:guid}/invites/{invite:guid}", async (Guid id, Guid invite, HttpContext h, CommunityService s, CancellationToken ct) => { await s.RevokeInviteAsync(User(h), id, invite, ct); return Results.NoContent(); });
@@ -59,4 +75,7 @@ internal static class CommunityEndpoints
     private sealed record OrderBody(Guid[] Ids);
     private sealed record InviteBody(int? MaxUses);
     private sealed record PublishBody(bool Enabled);
+    private sealed record RoleBody(string Name, string Color, int Position, int Permissions);
+    private sealed record AssignRoleBody(Guid? RoleId);
+    private sealed record MoveBody(Guid? ChannelId);
 }

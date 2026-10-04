@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { HubConnectionBuilder, LogLevel } from "@microsoft/signalr";
 import { AccountApiError, type AccountProfile } from "../api/accounts";
 import {
@@ -10,6 +10,7 @@ import {
   type Server,
   type ServerDetails,
   type Snapshot,
+  type Member,
 } from "../api/communities";
 import { useServices } from "../app/services";
 import { LiveKitRoomClient, type StreamDiagnostic } from "../media/LiveKitRoomClient";
@@ -23,32 +24,47 @@ import {
   type ShareOptions,
   type ShareView,
 } from "../media/RoomClient";
-import { type FpsPreset, type ResolutionPreset } from "../media/presets";
-import { StreamGrid, StreamTile } from "../features/workspace/StreamGrid";
+import { StreamStage } from "../features/workspace/StreamGrid";
+import type { ViewMode } from "../features/workspace/stageLayout";
 import "../styles/workspace.css";
 import "../styles/redesign.css";
 import { Diagnostics } from "../features/workspace/Diagnostics";
 import { networkLevel } from "../features/workspace/network";
-import { DraggablePanel } from "../features/workspace/DraggablePanel";
 import { IconPicker } from "../features/workspace/IconPicker";
-import { velunBridge } from "../desktop/velun";
+
 import { AppVersion, DownloadApp } from "../features/desktop/DownloadApp";
 import { NicknameForm } from "../features/workspace/NicknameForm";
+import { PasswordForm } from "../features/workspace/PasswordForm";
+import { useCallSounds } from "../features/workspace/useCallSounds";
+import { checkDesktopAudio, desktopProcessAudio, mutesOtherStreams, pcAudioAllowed, setPcAudioAllowed, velunBridge } from "../desktop/velun";
+import { WINDOWS10_AUDIO } from "../media/LiveKitScreenShare";
+import { h264HardwareKnown, hardwareEncodingPreferred, runEncoderBenchmark, setHardwareEncodingPreferred } from "../media/codecChoice";
+import { audioKeys, loadAudioMemory, rememberAudio, rememberedAudio, saveAudioMemory } from "../features/workspace/audioMemory";
+import { detectShareCapabilities } from "../media/capabilities";
+import { SoundSettings } from "../features/workspace/SoundSettings";
+import { QualityFields, loadQualityChoice, saveQualityChoice } from "../features/workspace/QualityFields";
+import { MembersPanel, MemberMenu, PERMISSIONS, permissionsFor, canModerate, memberRole } from "../features/workspace/CommunityControls";
+import "../styles/community.css";
+import "../styles/settings.css";
+import "../styles/stage.css";
+import { ServerSettings, type SettingsTab } from "../features/workspace/ServerSettings";
 
 type Dialog =
   | "server"
   | "manage"
   | "channel"
   | "invite"
+  | "share"
   | "quality"
   | "account"
   | "diagnostics"
+  | "roles"
   | null;
 const initialQuality: ShareOptions = {
   resolution: "1080p",
   fps: 30,
   surface: "any",
-  audio: false,
+  audio: true,
   audioScope: "shared",
 };
 const messages: Record<ConnectionPhase, string> = {
@@ -62,6 +78,9 @@ const messages: Record<ConnectionPhase, string> = {
 export function WorkspacePage() {
   const { accounts } = useServices();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const settingsTab = searchParams.get("settings") as SettingsTab | null;
+  const setSettingsTab = (tab: SettingsTab | null) => { setSearchParams((current) => { const params = new URLSearchParams(current); if (tab) params.set("settings", tab); else params.delete("settings"); return params; }, { replace: true }); };
   const { serverId } = useParams();
   const [profile, setProfile] = useState<AccountProfile | null>(null);
   const [servers, setServers] = useState<Server[]>([]);
@@ -88,10 +107,12 @@ export function WorkspacePage() {
   );
   const [phase, setPhase] = useState<ConnectionPhase>("disconnected");
   const [samples, setSamples] = useState<StreamDiagnostic[]>([]);
-  const [audioPreferences, setAudioPreferences] = useState<Record<string, AudioPreference>>({});
+  // volume/mudo de cada pessoa, lembrado neste navegador (ver audioMemory.ts)
+  const [audioMemory, setAudioMemory] = useState(loadAudioMemory);
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [appPing, setAppPing] = useState<number | undefined>();
-  const changeAudio = useCallback((id: string, patch: Partial<AudioPreference>) => setAudioPreferences((old) => ({ ...old, [id]: { muted: false, volume: 0.8, ...old[id], ...patch } })), []);
+  const shareKeys = useRef<(id: string) => string[]>(() => []);
+  const changeAudio = useCallback((id: string, patch: Partial<AudioPreference>) => setAudioMemory((old) => { const next = rememberAudio(old, shareKeys.current(id), patch); saveAudioMemory(next); return next; }), []);
   useEffect(() => {
     if (phase !== 'connected') { setSamples([]); return; }
     let active = true, pending = false;
@@ -102,12 +123,20 @@ export function WorkspacePage() {
   const [participants, setParticipants] = useState<ParticipantView[]>([]);
   const [shares, setShares] = useState<ShareView[]>([]);
   const [local, setLocal] = useState<LocalShare | null>(null);
-  const [quality, setQuality] = useState<ShareOptions>(initialQuality);
+  useCallSounds(phase, participants, shares);
+  // app no Windows 10? (sem captura por programa) — verificado antes de qualquer clique em compartilhar
+  useEffect(() => checkDesktopAudio(), []);
+  const [pcAudio, setPcAudio] = useState(pcAudioAllowed);
+  const [hardwareEncoding, setHardwareEncoding] = useState(hardwareEncodingPreferred);
+  const [quality, setQuality] = useState<ShareOptions>(() => loadQualityChoice(initialQuality));
   const [hidden, setHidden] = useState<string[]>([]);
   const [paused, setPaused] = useState(false);
-  const [ownInGrid, setOwnInGrid] = useState(false);
-  const [focus, setFocus] = useState<string | null>(null);
+  // Palco: viewMode = grid | focus; no destaque, focusedStreamId é a transmissão principal.
+  const [viewMode, setViewMode] = useState<ViewMode>("grid");
+  const [focusedStreamId, setFocusedStreamId] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
+  // teste do processador (~1 s) enquanto a pessoa escolhe a fonte: decide entre VP9 e VP8 sem atrasar o clique
+  useEffect(() => { if (dialog === "share") void runEncoderBenchmark(); }, [dialog]);
   const [editingChannel, setEditingChannel] = useState<Channel | null>(null);
   const [name, setName] = useState("");
   const [icon, setIcon] = useState<string | null>(null);
@@ -121,6 +150,11 @@ export function WorkspacePage() {
   const [mobileSidebar, setMobileSidebar] = useState(false);
   const [copied, setCopied] = useState(false);
   const owner = details?.ownerUserId === profile?.id;
+  const rights = permissionsFor(details, profile?.id);
+  const [showMembers, setShowMembers] = useState(false);
+  const [memberMenu, setMemberMenu] = useState<Member | null>(null);
+  const [dropChannel, setDropChannel] = useState<string | null>(null);
+  const moderationJoin = useRef<(id: string | null) => Promise<void>>(async () => {});
 
   const fail = useCallback(
     (e: unknown) => {
@@ -156,7 +190,7 @@ export function WorkspacePage() {
     setParticipants([]);
     setShares([]);
     setLocal(null);
-    setFocus(null);
+    setFocusedStreamId(null);
     if (old) await api.exit(old).catch(() => undefined);
   }, [client]);
 
@@ -189,12 +223,27 @@ export function WorkspacePage() {
   useEffect(() => {
     let active = true;
     void accounts.me().then((p) => {
-      if (active) setProfile(p);
+      if (!active) return;
+      // senha provisória do administrador: cria a própria senha antes de entrar nos servidores
+      if (p.mustChangePassword) { navigate("/account", { replace: true }); return; }
+      setProfile(p);
     }, fail);
     return () => {
       active = false;
     };
-  }, [accounts, fail]);
+  }, [accounts, fail, navigate]);
+  // Login encerrado em outro lugar (saiu em outro dispositivo, conta banida): volta para a entrada mesmo
+  // sem servidor aberto (dentro de um servidor, a presença já avisa na hora).
+  useEffect(() => {
+    if (!profile) return;
+    const timer = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      void accounts.me().catch((e: unknown) => {
+        if (e instanceof AccountApiError && e.status === 401) fail(e);
+      });
+    }, 20000);
+    return () => clearInterval(timer);
+  }, [profile, accounts, fail]);
   useEffect(() => {
     if (!profile) return;
     let active = true;
@@ -249,6 +298,7 @@ export function WorkspacePage() {
         void exit();
     };
     hub.on("Snapshot", apply);
+    hub.on("MemberMoved", (id: string, channel: string | null) => { if (active && id === serverId && channelRef.current) void moderationJoin.current(channel); });
     hub.on(
       "Presence",
       (snapshot: { serverId: string; channels: ChannelPresence[] }) => {
@@ -337,7 +387,8 @@ export function WorkspacePage() {
   const watched = shares.filter(
     (s) => !s.isLocal && !paused && !hidden.includes(s.id),
   );
-  const visible = [...watched, ...shares.filter((s) => s.isLocal && ownInGrid)];
+  // sua transmissão participa do palco como qualquer outra (miniatura "(Você)" no destaque)
+  const visible = [...watched, ...shares.filter((s) => s.isLocal)];
   const watchedIds = watched
     .map((s) => s.id)
     .sort()
@@ -345,9 +396,15 @@ export function WorkspacePage() {
   useEffect(() => {
     client.setWatchingShares(watchedIds ? watchedIds.split(",") : []);
   }, [client, watchedIds]);
+  const visibleIds = visible.map((s) => s.id).join(",");
   useEffect(() => {
-    if (focus && !visible.some((s) => s.id === focus)) setFocus(null);
-  }, [focus, visible]);
+    // a transmissão em destaque saiu: outra assume (de preferência de outra pessoa); sem nenhuma, volta à grade
+    if (viewMode !== "focus" || (focusedStreamId && visibleIds.split(",").includes(focusedStreamId))) return;
+    const next = visibleIds ? visibleIds.split(",")[0]! : null;
+    setFocusedStreamId(next);
+    if (!next) setViewMode("grid");
+  }, [viewMode, focusedStreamId, visibleIds]);
+  const focusStream = useCallback((id: string) => { setFocusedStreamId(id); setViewMode("focus"); }, []);
 
   async function join(channel: Channel) {
     if (
@@ -366,7 +423,6 @@ export function WorkspacePage() {
       setSelected(channel);
       setHidden([]);
       setPaused(false);
-      setOwnInGrid(false);
       await client.connect(response);
       if (profile && serverId) { rememberedKey.current = `tj:channel:${profile.id}:${serverId}`; try { sessionStorage.setItem(rememberedKey.current, channel.id); } catch { /* reconexão continua sem storage */ } }
       if (serverId) setPresence(await api.presence(serverId));
@@ -383,6 +439,22 @@ export function WorkspacePage() {
     await exit();
     setError("");
     navigate(`/app/${id}`);
+  }
+  moderationJoin.current = async (id) => {
+    if (!id) { await exit(); setError('Você foi desconectado do canal por um moderador.'); return; }
+    try { const current = await api.details(serverId!); const channel = current.channels.find((c) => c.id === id); if (channel) { await join(channel); setError('Você foi movido para este canal por um moderador.'); } } catch (e) { fail(e); }
+  };
+  async function watchFromChannel(id: string, identity: string) {
+    const channel = details?.channels.find((c) => c.id === id);
+    if (!channel) return;
+    if (channelRef.current !== id || phase !== 'connected') await join(channel);
+    if (channelRef.current === id) { watch(identity); focusStream(identity); setMobileSidebar(false); }
+  }
+  async function dropMember(e: React.DragEvent, channel: Channel) {
+    e.preventDefault(); setDropChannel(null);
+    const userId = e.dataTransfer.getData('application/x-velun-member');
+    if (!details || !profile || !userId || !(rights & PERMISSIONS.move) || !canModerate(details, profile.id, userId)) return;
+    await perform(async () => { await api.move(details.id, userId, channel.id); });
   }
   useEffect(() => {
     if (!profile || !details || restoredServer.current === details.id) return;
@@ -406,13 +478,14 @@ export function WorkspacePage() {
     }
   }
   function open(kind: Dialog, value = "") {
+    if (kind === "manage" || kind === "roles") { setSettingsTab(kind === "roles" ? "roles" : "general"); return; }
     setName(value);
     setDialog(kind);
     setError("");
     setConfirmDelete(false);
     setInviteLink("");
     setCopied(false);
-    setIcon(kind === "manage" ? details?.icon ?? null : null);
+    setIcon(null);
   }
   async function createServer(e: React.FormEvent) {
     e.preventDefault();
@@ -457,14 +530,15 @@ export function WorkspacePage() {
       await refresh();
     });
   }
-  async function applyQuality() {
+  async function applyQuality(surface?: ShareOptions["surface"]) {
     // Captura nativa é chamada diretamente no clique; nenhuma chamada HTTP a precede.
     if (busy) return;
     setBusy(true);
     setError("");
     try {
+      saveQualityChoice(quality);
       if (local) await client.updateQuality(quality);
-      else await client.startScreenShare(quality);
+      else { const options = { ...quality, surface: surface ?? quality.surface, audio: true, audioScope: "shared" as const, hardwareEncoding }; setQuality(options); await client.startScreenShare(options); }
       setDialog(null);
     } catch (e) {
       fail(e);
@@ -474,7 +548,6 @@ export function WorkspacePage() {
   }
   function hide(id: string) {
     setHidden((list) => [...new Set([...list, id])]);
-    if (focus === id) setFocus(null);
   }
   function watch(id: string) {
     if (paused)
@@ -484,9 +557,15 @@ export function WorkspacePage() {
     else setHidden((list) => list.filter((x) => x !== id));
     setPaused(false);
   }
-  const focused = visible.find((s) => s.id === focus);
-  const localView = shares.find((s) => s.isLocal);
-  const ownerActions = { quality: () => open("quality"), source: () => { void perform(async () => { await client.switchSource(quality); }); }, stop: () => { void perform(() => client.stopScreenShare()); }, audio: () => { void perform(() => client.setShareAudioEnabled(!local?.audioEnabled)); }, state: local };
+  const ownerActions = { quality: () => open("quality"), source: () => { void perform(async () => { await client.switchSource(quality); }); }, stop: () => { void perform(() => client.stopScreenShare()); }, state: local };
+  // quem é a conta por trás de cada transmissão (a sessão muda a cada entrada; a conta não)
+  const ownerAccount = new Map(presence.flatMap((c) => c.participants.map((p) => [p.identity, p.userId] as const)));
+  shareKeys.current = (id) => audioKeys(ownerAccount.get(id), shares.find((s) => s.id === id)?.ownerName ?? id);
+  const audioPreferences: Record<string, AudioPreference> = {};
+  for (const s of shares) {
+    const remembered = s.isLocal ? undefined : rememberedAudio(audioMemory, shareKeys.current(s.id));
+    if (remembered) audioPreferences[s.id] = remembered;
+  }
   const present =
     presence.find((c) => c.id === selected?.id)?.participants ?? [];
   const activeCount =
@@ -494,10 +573,15 @@ export function WorkspacePage() {
 
   return (
     <StreamContext.Provider value={{ samples, audio: audioPreferences, changeAudio }}>
-    <main className={`workspace${mobileSidebar ? " sidebar-open" : ""}`}>
+      {settingsTab && details && profile && <ServerSettings key={details.id} details={details} actor={profile.id} presence={presence} tab={settingsTab} selectTab={setSettingsTab} close={() => setSettingsTab(null)} refresh={refresh}
+        removed={async () => { await exit(); setSettingsTab(null); navigate("/app", { replace: true }); }}
+        editChannel={(id) => { const channel = details.channels.find((c) => c.id === id); setEditingChannel(channel ?? null); setSettingsTab(null); open("channel", channel?.name ?? ""); }}
+        invite={() => { setSettingsTab(null); open("invite"); if (rights & PERMISSIONS.invite) void api.invites(details.id).then(setInvites, fail); }} />}
+
+    <main className={`workspace${mobileSidebar ? " sidebar-open" : ""}${showMembers ? " members-open" : ""}`}>
       {watched.filter((s) => s.hasAudio).map((s) => <StreamAudio key={s.id} share={s} client={client} />)}
       <nav className="server-rail" aria-label="Servidores">
-        <Link className="rail-brand" to="/app" title="DiscordMeet">
+        <Link className="rail-brand" to="/app" title="Velun Gx">
           <Icon name="monitor" size={25} />
           <span />
         </Link>
@@ -536,8 +620,8 @@ export function WorkspacePage() {
         </header>
         <div className="channel-scroll">
           <div className="sidebar-label">
-            TRANSMISSÕES
-            {owner && (
+            CANAIS DE TRANSMISSÃO
+            {!!(rights & PERMISSIONS.channels) && (
               <button
                 aria-label="Criar canal"
                 title="Criar canal"
@@ -551,20 +635,20 @@ export function WorkspacePage() {
             )}
           </div>
           {details?.channels.map((c) => (
-            <div key={c.id} className="channel-row">
+            <div key={c.id} className={`channel-row${dropChannel === c.id ? ' drop-target' : ''}`} onDragOver={(e) => { if (rights & PERMISSIONS.move) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDropChannel(c.id); } }} onDragLeave={() => setDropChannel(null)} onDrop={(e) => void dropMember(e, c)}>
               <button
                 className={`channel-link${selected?.id === c.id ? " selected" : ""}`}
                 onClick={() => void join(c)}
                 disabled={busy}
               >
                 <span className="channel-hash">#</span>
-                {c.name}
+                <span className="channel-title">{c.name}</span>
                 <small>
                   {presence.find((p) => p.id === c.id)?.participants.length ||
                     ""}
                 </small>
               </button>
-              {owner && (
+              {!!(rights & PERMISSIONS.channels) && (
                 <button
                   className="channel-edit"
                   aria-label={`Configurar canal ${c.name}`}
@@ -577,13 +661,13 @@ export function WorkspacePage() {
                 </button>
               )}
               {/* quem está no canal, mesmo sem você estar dentro (no seu canal, a lista completa fica em "Participantes") */}
-              {selected?.id !== c.id && (presence.find((p) => p.id === c.id)?.participants.length ?? 0) > 0 && (
+              {(presence.find((p) => p.id === c.id)?.participants.length ?? 0) > 0 && (
                 <ul className="channel-members" aria-label={`Conectados em ${c.name}`}>
                   {presence.find((p) => p.id === c.id)!.participants.map((m) => (
-                    <li key={m.identity}>
+                    <li key={m.identity} draggable={!!profile && !!(rights & PERMISSIONS.move) && canModerate(details!, profile.id, m.userId)} onDragStart={(e) => { e.dataTransfer.setData('application/x-velun-member', m.userId); e.dataTransfer.effectAllowed = 'move'; }} onContextMenu={(e) => { e.preventDefault(); const member = details?.members.find((p) => p.id === m.userId); if (member) setMemberMenu(member); }}>
                       <span className="channel-member-avatar" aria-hidden="true">{m.name.trim().slice(0, 2).toUpperCase()}</span>
-                      <span className="channel-member-name">{m.name}</span>
-                      {m.isSharing && <span className="channel-member-live">AO VIVO</span>}
+                      <button className="channel-member-name" style={{ color: details ? memberRole(details, details.members.find((p) => p.id === m.userId))?.color : undefined }} onClick={() => { const member = details?.members.find((p) => p.id === m.userId); if (member) setMemberMenu(member); }}>{m.name}</button>
+                      {m.isSharing && <button className="channel-member-live" aria-label={`Assistir ao vivo ${m.name}`} onClick={() => void watchFromChannel(c.id, m.identity)}>AO VIVO</button>}
                     </li>
                   ))}
                 </ul>
@@ -614,7 +698,6 @@ export function WorkspacePage() {
                         ? "Transmitindo"
                         : "Online"}
                   </small>
-                  <small className={`participant-ping net-${networkLevel(p.isLocal ? appPing : p.report?.appPingMs, undefined)}`} title="Ping de sinalização, reportado pelo próprio usuário (verde < 50 ms, amarelo a partir de 50 ms, vermelho a partir de 150 ms)"><Icon name="signal" size={11} />{p.isLocal ? appPing === undefined ? 'Medindo…' : `${Math.round(appPing)} ms` : p.report?.appPingMs === undefined ? '— ms' : `${Math.round(p.report.appPingMs)} ms`}</small>
                 </div>
                 {p.isSharing && !p.isLocal && (
                   <button
@@ -643,9 +726,9 @@ export function WorkspacePage() {
               className="invite-shortcut"
               onClick={() => {
                 open("invite");
-                if (owner) void api.invites(details.id).then(setInvites, fail);
+                if (rights & PERMISSIONS.invite) void api.invites(details.id).then(setInvites, fail);
               }}
-              disabled={!owner}
+              disabled={!(rights & PERMISSIONS.invite)}
               title={
                 owner
                   ? "Convidar amigos"
@@ -655,6 +738,7 @@ export function WorkspacePage() {
               ↗ Convidar amigos
             </button>
           )}
+          {details && <div className="sidebar-tools"><button onClick={() => setShowMembers(!showMembers)}><Icon name="users" />Membros <span>{details.members.length}</span></button><button onClick={() => open('manage')}><Icon name="settings" />Configurações do servidor</button></div>}
         </div>
         {selected && (
           <div className="channel-connection">
@@ -664,6 +748,7 @@ export function WorkspacePage() {
             <div>
               <strong>{messages[phase]}</strong>
               <small>#{selected.name}</small>
+              <small className={`connection-ping net-${networkLevel(appPing, undefined)}`}><Icon name="signal" size={12} /> {appPing === undefined ? 'Medindo ping…' : `${Math.round(appPing)} ms`}</small>
             </div>
             <button
               aria-label="Sair do canal"
@@ -714,11 +799,11 @@ export function WorkspacePage() {
               className={`presence-dot${selected && phase !== "connected" ? " reconnecting" : ""}`}
             />
             {selected ? messages[phase] : "Online"}
-            {selected && appPing !== undefined && <strong>{Math.round(appPing)} ms</strong>}
           </button>
+          {details && <button className={`members-toggle${showMembers ? ' selected' : ''}`} aria-label="Mostrar membros do servidor" aria-pressed={showMembers} onClick={() => setShowMembers(!showMembers)}><Icon name="users" /><span>{details.members.length}</span></button>}
         </header>
-        {local?.desktopAudio === "exclude-discord" && local.audioEnabled && <div className="workspace-notice" role="status"><Icon name="volume" /><span>Transmitindo o som do PC sem a call do Discord. O som das outras transmissões fica pausado aqui enquanto isso, para não voltar para a sala (eco).</span></div>}
-        {local?.audioRequested && !local.hasAudio && local.audioError && <div className="workspace-notice" role="status"><Icon name="mute" /><span>Transmitindo sem som: {local.audioError}</span></div>}
+        {mutesOtherStreams(local?.desktopAudio) && local?.audioEnabled && <div className="workspace-notice" role="status"><Icon name="volume" /><span>{local?.desktopAudio === "system-loopback" ? "Transmitindo todo o som do PC (inclui a call do Discord). O som das outras transmissões fica mudo para você enquanto isso, senão voltaria para a sala como eco." : "O som das outras transmissões fica pausado enquanto você transmite, para evitar eco."}</span></div>}
+        {local?.audioRequested && !local.hasAudio && local.audioError && <div className="workspace-notice" role="status"><Icon name="mute" /><span>Transmitindo sem som: {local.audioError}</span>{local.audioError === WINDOWS10_AUDIO && <button className="btn" disabled={busy} onClick={() => { setPcAudioAllowed(true); setPcAudio(true); void perform(async () => { await client.switchSource(quality); }); }}>Ativar som do PC</button>}</div>}
         {audioBlocked && watched.some((s) => s.hasAudio) && <div className="workspace-notice audio-unlock"><Icon name="volume" /><span>O navegador está aguardando sua permissão para tocar o som.</span><button className="btn" onClick={() => void client.startAudio().catch(fail)}>Ativar áudio</button></div>}
         {presenceState && serverId && (
           <div className="workspace-notice" role="status">
@@ -743,8 +828,8 @@ export function WorkspacePage() {
           </span>
           <div className="view-controls">
             <div className="view-segment" role="group" aria-label="Modo de visualização">
-              <button aria-label={focus ? 'Voltar para grade' : 'Visualização em grade'} aria-pressed={!focus} onClick={() => setFocus(null)}><Icon name="grid" size={16} /><span>Grade</span></button>
-              <button aria-label="Visualização em destaque" aria-pressed={!!focus} disabled={!visible.length} onClick={() => setFocus(visible[0]?.id ?? null)}><Icon name="focus" size={17} /><span>Destaque</span></button>
+              <button aria-label={viewMode === 'focus' ? 'Voltar para grade' : 'Visualização em grade'} aria-pressed={viewMode === 'grid'} onClick={() => setViewMode('grid')}><Icon name="grid" size={16} /><span>Grade</span></button>
+              <button aria-label="Visualização em destaque" aria-pressed={viewMode === 'focus'} disabled={!visible.length} onClick={() => focusStream(visible.some((s) => s.id === focusedStreamId) ? focusedStreamId! : visible[0]!.id)}><Icon name="focus" size={17} /><span>Destaque</span></button>
             </div>
             {shares.some((s) => !s.isLocal) && (
               // Um botão só: assistindo tudo → oferece "Não assistir"; com algo oculto → oferece "Ver todas".
@@ -756,7 +841,6 @@ export function WorkspacePage() {
                   title="Parar de receber todas as transmissões (economiza internet)"
                   onClick={() => {
                     setPaused(true);
-                    setFocus(null);
                   }}
                 >
                   <Icon name="eyeOff" size={17} /><span>Não assistir</span>
@@ -778,44 +862,15 @@ export function WorkspacePage() {
           </div>
         </div>
         <div className="workspace-stage">
-          {focused ? (
-            <div className="focus-layout">
-              <div className="focus-main">
-                <StreamTile
-                  share={focused}
-                  ownerActions={ownerActions}
-                  client={client}
-                  focus={() => setFocus(null)}
-                  hide={() =>
-                    focused.isLocal ? setOwnInGrid(false) : hide(focused.id)
-                  }
-                />
-              </div>
-              <div className="focus-thumbnails">
-                {visible
-                  .filter((s) => s.id !== focus)
-                  .map((s) => (
-                    <StreamTile
-                      key={s.id}
-                      share={s}
-                      client={client}
-                      focus={() => setFocus(s.id)}
-                      compact
-                    />
-                  ))}
-              </div>
-            </div>
-          ) : visible.length ? (
-            <StreamGrid
-              shares={visible}
-              ownerActions={ownerActions}
+          {visible.length ? (
+            <StreamStage
+              streams={visible}
+              viewMode={viewMode}
+              focusedStreamId={focusedStreamId}
+              onFocus={focusStream}
               client={client}
-              focus={setFocus}
-              hide={(id) =>
-                shares.find((s) => s.id === id)?.isLocal
-                  ? setOwnInGrid(false)
-                  : hide(id)
-              }
+              hide={hide}
+              ownerActions={ownerActions}
             />
           ) : (
             <div className="workspace-empty">
@@ -861,37 +916,6 @@ export function WorkspacePage() {
               )}
             </div>
           )}
-          {localView && !ownInGrid && (
-            <DraggablePanel className="local-preview" storageKey="tj:previewPosition" label="Sua transmissão (arraste para mover)">
-              <StreamTile
-                share={localView}
-                ownerActions={ownerActions}
-                client={client}
-                compact
-                focus={() => {
-                  setOwnInGrid(true);
-                  setFocus(localView.id);
-                }}
-              />
-              <div className="preview-footer">
-                <span>
-                  {local?.width} × {local?.height} · {local?.fps} FPS
-                </span>
-                <button
-                  aria-label="Configurar transmissão"
-                  onClick={() => open("quality")}
-                >
-                  ⚙
-                </button>
-                <button
-                  aria-label="Parar transmissão"
-                  onClick={() => void perform(() => client.stopScreenShare())}
-                >
-                  ■
-                </button>
-              </div>
-            </DraggablePanel>
-          )}
         </div>
         {(hidden.length > 0 || paused) && shares.some((s) => !s.isLocal) && (
           <div className="hidden-streams">
@@ -906,6 +930,7 @@ export function WorkspacePage() {
         )}
         <footer className="workspace-controls">
           <div>
+            <button className={`footer-ping net-${networkLevel(appPing, undefined)}`} title="Seu ping de sinalização. Abrir diagnóstico." onClick={() => open('diagnostics')}><Icon name="signal" size={14} />{appPing === undefined ? 'Medindo ping…' : `${Math.round(appPing)} ms`}</button>
             <span className="control-caption">
               {selected
                 ? `${activeCount} ${activeCount === 1 ? "pessoa" : "pessoas"} no canal`
@@ -917,11 +942,11 @@ export function WorkspacePage() {
               <>
                 <button
                   className="btn control-settings"
-                  onClick={() => open("quality")}
+                  onClick={() => open(local ? "quality" : "share")}
                 >
                   <Icon name="settings" /><span>Qualidade</span>
                 </button>
-                <button className="btn" disabled={!local.hasAudio} title={!local.hasAudio ? 'O navegador não forneceu áudio. Use Trocar tela/janela para capturar com som.' : 'Ativa ou pausa o envio de áudio'} onClick={() => void perform(() => client.setShareAudioEnabled(!local.audioEnabled))}><Icon name={local.audioEnabled ? 'volume' : 'mute'} /><span>{local.hasAudio ? local.audioEnabled ? 'Desativar áudio' : 'Ativar áudio' : 'Sem áudio'}</span></button>
+
                 <button
                   className="btn"
                   onClick={() => {
@@ -942,15 +967,17 @@ export function WorkspacePage() {
               <button
                 className="btn btn-primary"
                 disabled={!selected || phase !== "connected" || busy}
-                onClick={() => open("quality")}
+                onClick={() => open(local ? "quality" : "share")}
               >
                 <Icon name="monitor" /><span>Compartilhar tela</span>
               </button>
             )}
           </div>
-          <span className="control-caption control-brand">Discord<span>Meet</span><AppVersion /></span>
+          <span className="control-caption control-brand">Velun<span> Gx</span><AppVersion /></span>
         </footer>
       </section>
+      {details && showMembers && <MembersPanel details={details} presence={presence} choose={setMemberMenu} close={() => setShowMembers(false)} />}
+      {details && profile && memberMenu && (() => { const identity = presence.flatMap((c) => c.participants).find((p) => p.userId === memberMenu.id)?.identity; const participant = participants.find((p) => p.identity === identity); return <MemberMenu key={memberMenu.id} details={details} actor={profile.id} member={details.members.find((m) => m.id === memberMenu.id) ?? memberMenu} presence={presence} ping={memberMenu.id === profile.id ? appPing : participant?.report?.appPingMs} mediaPing={participant?.report?.rttMs} chooseLive={(channel, id) => void watchFromChannel(channel, id)} close={() => setMemberMenu(null)} refresh={refresh} fail={fail} />; })()}
       {dialog && (
         <div
           className="workspace-modal-backdrop"
@@ -1090,116 +1117,6 @@ export function WorkspacePage() {
                 )}
               </>
             )}
-            {dialog === "manage" && details && (
-              <>
-                <h2 id="dialog-title">{details.name}</h2>
-                {owner ? (
-                  <>
-                    <form
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        void perform(async () => {
-                          await api.rename(details.id, name.trim());
-                          await api.setIcon(details.id, icon);
-                          await refresh();
-                          setDialog(null);
-                        });
-                      }}
-                    >
-                      <label className="field-label" htmlFor="edit-server-name">
-                        Nome do servidor
-                      </label>
-                      <input
-                        className="input"
-                        id="edit-server-name"
-                        value={name}
-                        maxLength={80}
-                        required
-                        onChange={(e) => setName(e.target.value)}
-                      />
-                      <button className="btn btn-primary" disabled={busy}>
-                        Salvar servidor
-                      </button>
-                      <IconPicker value={icon} onChange={setIcon} />
-                    </form>
-                    <h3>Membros ({details.members.length})</h3>
-                    <div className="member-management">
-                      {details.members.map((m) => (
-                        <div key={m.id}>
-                          <span>
-                            {m.name}{m.name !== m.username && <small>@{m.username}</small>}
-                            <small>
-                              {m.role === "owner" ? "Proprietário" : "Membro"}
-                            </small>
-                          </span>
-                          {m.id !== profile?.id && (
-                            <button
-                              className="subtle-button danger-text"
-                              disabled={busy}
-                              onClick={() =>
-                                void perform(async () => {
-                                  await api.kick(details.id, m.id);
-                                  await refresh();
-                                })
-                              }
-                            >
-                              Expulsar
-                            </button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                    {confirmDelete ? (
-                      <>
-                        <p className="error-text">
-                          Excluir este servidor encerra todos os canais e
-                          convites.
-                        </p>
-                        <button
-                          className="btn btn-danger"
-                          disabled={busy}
-                          onClick={() =>
-                            void perform(async () => {
-                              await api.remove(details.id);
-                              await exit();
-                              setDialog(null);
-                              navigate("/app", { replace: true });
-                            })
-                          }
-                        >
-                          Confirmar exclusão do servidor
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        className="btn btn-danger"
-                        onClick={() => setConfirmDelete(true)}
-                      >
-                        Excluir servidor
-                      </button>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <p className="muted">Você é membro deste servidor.</p>
-                    <button
-                      className="btn btn-danger"
-                      disabled={busy}
-                      onClick={() =>
-                        void perform(async () => {
-                          await api.leave(details.id);
-                          await exit();
-                          setDialog(null);
-                          navigate("/app", { replace: true });
-                        })
-                      }
-                    >
-                      Sair do servidor
-                    </button>
-                  </>
-                )}
-              </>
-            )}
             {dialog === "invite" && details && (
               <>
                 <h2 id="dialog-title">Convide sua turma</h2>
@@ -1278,6 +1195,20 @@ export function WorkspacePage() {
                 </div>
               </>
             )}
+            {dialog === "share" && <>
+              <span className="eyebrow">COMPARTILHAR COM O CANAL</span>
+              <h2 id="dialog-title">O que você quer transmitir?</h2>
+              <p className="muted">Escolha a qualidade e a fonte. O áudio é enviado automaticamente quando disponível.</p>
+              <QualityFields value={quality} onChange={setQuality} />
+              <label className="checkbox hw-encoding-option"><input type="checkbox" checked={hardwareEncoding} onChange={(e) => { setHardwareEncodingPreferred(e.target.checked); setHardwareEncoding(e.target.checked); }} /><span><strong>Aceleração de hardware (placa de vídeo)</strong><small className="muted">{h264HardwareKnown() === false ? "Na última transmissão a placa de vídeo deste PC não codificou H.264; o app usa o processador." : "Transmite em H.264 pela placa de vídeo (NVIDIA, AMD ou Intel): menos peso no processador durante o jogo. Desligado, o app escolhe VP9 ou VP8 conforme o seu processador."}</small></span></label>
+              {velunBridge() && desktopProcessAudio() === false && <label className="checkbox pc-audio-option"><input type="checkbox" checked={pcAudio} onChange={(e) => { setPcAudioAllowed(e.target.checked); setPcAudio(e.target.checked); }} /><span><strong>Som do PC (inclui a call do Discord)</strong><small className="muted">Seu Windows não permite tirar programas do som (é anterior ao Windows 10 versão 2004): quem assiste ouve tudo que toca no seu PC, inclusive a call. Enquanto você transmite com som, as outras transmissões ficam mudas para você, senão voltariam como eco. Atualizando o Windows, o Velun Gx tira a call e esse problema deixa de existir.</small></span></label>}
+              {!velunBridge() && !detectShareCapabilities().canShareAudio && <p className="audio-warning" role="note">Este navegador não envia o som da tela (o Firefox, por exemplo, não oferece isso). Para transmitir com áudio, use o app Velun Gx (botão ⬇ Baixar app) ou o Chrome/Edge.</p>}
+              <div className="share-source-options">
+                <button disabled={busy || phase !== "connected"} onClick={() => void applyQuality("window")}><Icon name="focus" size={36} /><strong>Janela</strong><small>Um aplicativo específico</small></button>
+                <button disabled={busy || phase !== "connected"} onClick={() => void applyQuality("monitor")}><Icon name="monitor" size={36} /><strong>Tela inteira</strong><small>Tudo o que está na tela</small></button>
+              </div>
+              <p className="muted small">O seletor do sistema confirma a fonte e as permissões. A qualidade também pode ser ajustada durante a transmissão, sem interrompê-la.</p>
+            </>}
             {dialog === "quality" && (
               <>
                 <span className="eyebrow">
@@ -1291,56 +1222,8 @@ export function WorkspacePage() {
                 <p className="muted">
                   Escolha nitidez e fluidez. O navegador abrirá o seletor de tela, janela ou aba.
                 </p>
-                <div className="quality-fields">
-                  <label className="field">
-                    <span className="field-label">Resolução</span>
-                    <select
-                      className="input"
-                      aria-label="Resolução"
-                      value={quality.resolution}
-                      onChange={(e) =>
-                        setQuality({
-                          ...quality,
-                          resolution: e.target.value as ResolutionPreset,
-                        })
-                      }
-                    >
-                      <option value="original">Original</option>
-                      <option value="auto">Automática</option>
-                      <option value="1080p">1080p</option>
-                      <option value="1440p">1440p</option>
-                      <option value="2160p">4K</option>
-                      <option value="720p">720p</option>
-                      <option value="480p">480p</option>
-                      <option value="360p">360p</option>
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span className="field-label">FPS</span>
-                    <select
-                      className="input"
-                      aria-label="FPS"
-                      value={quality.fps}
-                      onChange={(e) =>
-                        setQuality({
-                          ...quality,
-                          fps: Number(e.target.value) as FpsPreset,
-                        })
-                      }
-                    >
-                      {[60, 30, 15].map((fps) => (
-                        <option key={fps} value={fps}>
-                          {fps} FPS
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-                <div className="share-audio-option">
-                  <label><Icon name="volume" /><span><strong>Compartilhar áudio</strong><small>Som da aba, janela ou sistema, quando disponível.</small></span><input type="checkbox" aria-label="Compartilhar áudio" checked={quality.audio} onChange={(e) => setQuality({ ...quality, audio: e.target.checked })} /></label>
-                  {quality.audio && <label className="field"><span className="field-label">Origem do áudio</span><select className="input" aria-label="Origem do áudio" value={quality.audioScope} onChange={(e) => setQuality({ ...quality, audioScope: e.target.value as 'shared' | 'system' })}>{velunBridge() ? <><option value="shared">O que eu compartilhar (tela: PC sem o Discord; janela: só aquele programa)</option><option value="system">Todo o som do PC, sem o Discord</option></> : <><option value="shared">Somente a aba ou janela compartilhada</option><option value="system">Todo o som do computador</option></>}</select><small className="muted">{velunBridge() ? 'O Velun Gx tira a call do Discord do som transmitido. Requer Windows 11.' : quality.audioScope === 'system' ? 'Inclui Discord, chamadas e notificações. O navegador não consegue excluir um aplicativo do áudio geral.' : 'Compartilhar uma aba é a opção mais compatível. O áudio de janela depende do navegador e sistema.'}</small></label>}
-                  {local && <p className="muted small">Para mudar a origem ou adicionar áudio, use Trocar tela/janela após salvar. O navegador exige uma nova escolha da fonte.</p>}
-                </div>
+                <QualityFields value={quality} onChange={setQuality} />
+                <p className="muted small">O áudio da fonte é enviado automaticamente quando disponível. Quem assiste controla o volume e o mute.</p>
                 {local?.audioRequested && !local.hasAudio && <p className="audio-warning">{local.audioError ? `Sem som: ${local.audioError} O vídeo continua normalmente.` : "O navegador não forneceu áudio para esta fonte. O vídeo continua normalmente."}</p>}
                 {local && (
                   <p className="muted small">
@@ -1372,6 +1255,7 @@ export function WorkspacePage() {
               </>
             )}
             {dialog === "diagnostics" && <Diagnostics />}
+
             {dialog === "account" && (
               <>
                 <h2 id="dialog-title">Sua conta</h2>
@@ -1383,6 +1267,8 @@ export function WorkspacePage() {
                   {profile && profile.name !== profile.username && <small className="muted">@{profile.username}</small>}
                 </div>
                 {profile && <NicknameForm profile={profile} onSaved={setProfile} />}
+                {profile && <PasswordForm onSaved={setProfile} />}
+                <SoundSettings />
                 <DownloadApp />
                 <p className="muted">
                   Seus servidores continuam vinculados à sua conta quando você

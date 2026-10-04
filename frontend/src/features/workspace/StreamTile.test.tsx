@@ -107,14 +107,14 @@ describe('tela cheia: barras só aparecem ao mexer o mouse', () => {
   it('com o mouse sobre a barra, ela não some', async () => {
     const tile = await enterFullscreen()
     fireEvent.mouseMove(tile, { movementX: 4, movementY: 4 })
-    const footer = tile.querySelector('.stream-card-footer')!
+    const footer = tile.querySelector('.stage-bottom')!
     fireEvent.mouseEnter(footer)
 
     act(() => { vi.advanceTimersByTime(5000) })
     expect(tile).not.toHaveClass('chrome-hidden')
   })
 
-  it('fora da tela cheia, as barras ficam sempre visíveis', async () => {
+  it('fora da tela cheia, nada fica escondido à força (controles aparecem ao passar o mouse)', async () => {
     const tile = await enterFullscreen()
     await act(async () => { await document.exitFullscreen() })
     act(() => { vi.advanceTimersByTime(5000) })

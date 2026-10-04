@@ -40,7 +40,7 @@ internal static class AccountAuthentication
         AccountSession? session = null;
         if (Guid.TryParse(userId, out var uid) && Guid.TryParse(sessionId, out var sid))
             session = await db.AccountSessions.SingleOrDefaultAsync(x => x.Id == sid && x.UserId == uid, ct);
-        if (session is null || !session.IsValid(now) || !await db.Users.AnyAsync(u => u.Id == uid && u.SecurityStamp == stamp, ct))
+        if (session is null || !session.IsValid(now) || !await db.Users.AnyAsync(u => u.Id == uid && u.SecurityStamp == stamp && u.BannedAt == null, ct))
         {
             context.RejectPrincipal();
             await context.HttpContext.SignOutAsync(Scheme);

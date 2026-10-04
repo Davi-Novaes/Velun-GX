@@ -3,8 +3,9 @@ import type { JoinResponse } from './contracts'
 
 export interface Server { id: string; name: string; icon: string | null; ownerUserId: string; role: string; memberCount: number }
 export interface Channel { id: string; name: string; position: number }
-export interface Member { id: string; username: string; name: string; role: string }
-export interface ServerDetails { id: string; name: string; icon: string | null; ownerUserId: string; channels: Channel[]; members: Member[] }
+export interface ServerRole { id: string; serverId: string; name: string; color: string; position: number; permissions: number }
+export interface Member { id: string; username: string; name: string; role: string; serverRoleId?: string | null }
+export interface ServerDetails { id: string; name: string; icon: string | null; ownerUserId: string; channels: Channel[]; members: Member[]; roles?: ServerRole[] }
 export interface ChannelPresence { id: string; name: string; participants: { userId: string; identity: string; name: string; isSharing: boolean }[] }
 export interface Snapshot { serverId: string; details: ServerDetails; channels: ChannelPresence[] }
 export interface Invite { id: string; code: string; expiresAt: string | null }
@@ -41,6 +42,10 @@ export const communities = {
   remove: (id: string) => communityCall<void>(`/servers/${id}`, 'DELETE'),
   leave: (id: string) => communityCall<void>(`/servers/${id}/leave`, 'POST'),
   kick: (id: string, user: string) => communityCall<void>(`/servers/${id}/members/${user}`, 'DELETE'),
+  move: (id: string, user: string, channelId: string | null) => communityCall<void>(`/servers/${id}/members/${user}/move`, 'POST', { channelId }),
+  assignRole: (id: string, user: string, roleId: string | null) => communityCall<void>(`/servers/${id}/members/${user}/role`, 'PUT', { roleId }),
+  saveRole: (id: string, role: { id?: string; name: string; color: string; position: number; permissions: number }) => communityCall<ServerRole>(`/servers/${id}/roles${role.id ? `/${role.id}` : ''}`, role.id ? 'PUT' : 'POST', role),
+  deleteRole: (id: string, role: string) => communityCall<void>(`/servers/${id}/roles/${role}`, 'DELETE'),
   createChannel: (id: string, name: string) => communityCall<Channel>(`/servers/${id}/channels`, 'POST', { name }),
   renameChannel: (id: string, name: string) => communityCall<void>(`/channels/${id}`, 'PATCH', { name }),
   removeChannel: (id: string) => communityCall<void>(`/channels/${id}`, 'DELETE'),

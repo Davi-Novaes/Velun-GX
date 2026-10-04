@@ -30,7 +30,7 @@ test('reconecta presença, remove membro do SFU e exclui canal ativo sem fantasm
       await expect(p.page.getByRole('button', { name: /Compartilhar tela/ })).toBeEnabled()
     }
     await b.page.getByRole('button', { name: /Compartilhar tela/ }).click()
-    await b.page.getByRole('dialog').getByRole('button', { name: 'Começar transmissão' }).click()
+    await b.page.getByRole('dialog').getByRole('button', { name: 'Tela inteira', exact: false }).click()
     await expectVideoFlowing(a, `Tela de ${member.username}`)
     // offline do navegador testa queda de signaling/presença, não simula perda de UDP no roteador.
     await a.context.setOffline(true)
@@ -39,7 +39,7 @@ test('reconecta presença, remove membro do SFU e exclui canal ativo sem fantasm
     await expect.poll(async () => (await call(a, `/servers/${server.id}/presence`))[0].participants.length).toBe(2)
     await expectVideoFlowing(a, `Tela de ${member.username}`)
     await call(a, `/servers/${server.id}/members/${member.id}`, 'DELETE')
-    await expect(a.page.locator('.stream-grid .stream-tile')).toHaveCount(0)
+    await expect(a.page.locator('.stream-stage .stage-tile')).toHaveCount(0)
     await expect(b.page.getByRole('button', { name: 'Sair do canal' })).toHaveCount(0)
     await expect.poll(async () => (await call(a, `/servers/${server.id}/presence`))[0].participants.map((p: { userId: string }) => p.userId)).toEqual([owner.id])
     await call(a, `/channels/${channel.id}`, 'DELETE')

@@ -10,7 +10,7 @@ App Electron que abre o sistema (`https://discordmeet.ddns.net:8443/app`) e tran
 | App | `desktop/src` (Electron) | Seletor de tela/janela próprio, certificado do servidor fixado por SHA-256 (`desktop/src/config.ts`), ponte `window.velun`, atualização automática. |
 | Página | `frontend/src/desktop/velun.ts` | Só ativa dentro do app. Converte o PCM em faixa de áudio (AudioWorklet, ~40 ms de folga) publicada como `screen_share_audio`. |
 
-**Eco:** o som do PC inclui o som que o próprio app toca. Enquanto alguém transmite o som do PC (modo sem Discord), o som das transmissões dos outros fica pausado só no PC dessa pessoa.
+**Eco (0.2.6+):** o Windows só exclui UMA árvore de processos por captura. Para tirar ao mesmo tempo o Discord e o próprio Velun Gx (que toca o som das transmissões dos outros), o componente lista as sessões de áudio de todas as saídas de som, captura cada programa separadamente (modo "incluir") e mistura tudo, procurando programas novos a cada segundo (`--multi --exclude-tree-pid <pid do app>`). Assim você ouve os outros transmitindo enquanto transmite, sem eco. Sons de notificação do Windows ficam de fora. Se o Windows não deixar listar as sessões, o componente cai para o modo antigo (só sem o Discord) e a página silencia as outras transmissões enquanto você transmite.
 
 ## Publicar uma versão nova
 
@@ -19,6 +19,12 @@ App Electron que abre o sistema (`https://discordmeet.ddns.net:8443/app`) e tran
 3. Copie os três arquivos para `/opt/tela/infra/downloads/` no servidor (servidos em `/downloads/`, fora da imagem do site).
 4. Apps instalados baixam a versão nova sozinhos (a cada 4 h e ao abrir) e instalam ao fechar. O site mostra o link **Baixar app** quando existe `latest.yml`.
 
+## Instalação de atualizações (0.2.5+)
+
+- "Reiniciar e atualizar" espera o componente de áudio sair (ele roda de dentro da pasta do app) e abre o instalador **com janela de progresso**; ao terminar, o Velun Gx abre sozinho. Antes (0.2.0–0.2.4) a instalação era silenciosa: sem nada na tela, quem abria o app de novo no meio dela fazia a instalação falhar e o app antigo pedia a mesma atualização outra vez.
+- Antes de instalar, o app grava `update-attempt.json` na pasta de dados. Se abrir de novo ainda na versão antiga, mostra "A atualização para a versão X não foi concluída" com **Tentar de novo** e **Baixar instalador**.
+- Registro do atualizador: `%APPDATA%\Velun Gx\logs\updater.log` (peça esse arquivo para diagnosticar a falha de alguém).
+
 ## Certificado do servidor
 
 O app só aceita o certificado cuja impressão digital está em `desktop/src/config.ts` (o atual vence em 03/11/2027).
@@ -26,6 +32,7 @@ Ao trocar o certificado: **primeiro** inclua a nova impressão digital, publique
 
 ## Testes
 
+- Teste de atualização: sempre com `--user-data-dir=<pasta temporária>` e `VELUN_UPDATE_URL`; nesses modos o app **nunca instala**. Mesmo assim, o instalador e o cache (`%LOCALAPPDATA%\velun-gx-updater`) são compartilhados com o app instalado: compare a versão do app instalado antes e depois.
 - `VELUN_SMOKE=1 npx electron .` (em `desktop/`): abre o servidor, confere seletor, ponte e som sem o Discord e encerra. No executável instalado, use também `VELUN_SMOKE_OUT=<arquivo>`.
 - Página nova sem publicar: `STACK_URL=https://discordmeet.ddns.net:8443 npx vite` (em `frontend/`) e `VELUN_URL=http://localhost:5173 npx electron .`.
 

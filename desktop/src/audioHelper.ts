@@ -2,8 +2,12 @@ import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process'
 import path from 'node:path'
 import { app, type WebContents } from 'electron'
 
-/** Origem do som escolhida pelo app conforme a fonte e a opção da pessoa. */
-export type AudioMode = 'exclude-discord' | 'window-app'
+/**
+ * Origem do som. exclude-discord-and-app: PC sem o Discord e sem o próprio Velun Gx (você continua ouvindo as
+ * transmissões dos outros). exclude-discord: modo antigo/reserva, que inclui o som do app — a página então
+ * silencia as outras transmissões enquanto você transmite, para não dar eco. window-app: só o programa da janela.
+ */
+export type AudioMode = 'exclude-discord-and-app' | 'exclude-discord' | 'window-app'
 
 export interface SelectedSource {
   id: string
@@ -33,6 +37,8 @@ export class AudioHelper {
   private probeResult: Promise<{ supported: boolean; message?: string }> | null = null
 
   probe(): Promise<{ supported: boolean; message?: string }> {
+    // testes: simula um Windows sem captura por programa (Windows 10)
+    if (process.env.VELUN_SIMULATE_WIN10 === '1') return Promise.resolve({ supported: false, message: 'A captura por programa exige Windows 11.' })
     this.probeResult ??= new Promise((resolve) => {
       const child = spawn(helperPath(), ['--probe'], { windowsHide: true })
       let output = ''
@@ -46,13 +52,18 @@ export class AudioHelper {
     return this.probeResult
   }
 
-  start(owner: WebContents, scope: 'shared' | 'system', source: SelectedSource | null): { mode: AudioMode } {
+  async start(owner: WebContents, scope: 'shared' | 'system', source: SelectedSource | null): Promise<{ mode: AudioMode }> {
     this.stop()
-    // janela + "só o que é compartilhado": som apenas daquele programa; nos outros casos, o PC inteiro sem o Discord
+    // janela + "só o que é compartilhado": som apenas daquele programa; nos outros casos, o PC inteiro sem o
+    // Discord e sem o próprio app (a árvore deste processo inclui o serviço de áudio do Chromium)
     const hwnd = scope === 'shared' && source?.kind === 'window' ? source.id.split(':')[1] : undefined
-    const mode: AudioMode = hwnd ? 'window-app' : 'exclude-discord'
-    const child = spawn(helperPath(), hwnd ? ['--include-hwnd', hwnd] : [], { windowsHide: true })
+    const args = hwnd ? ['--include-hwnd', hwnd] : ['--multi', '--exclude-tree-pid', String(process.pid)]
+    const child = spawn(helperPath(), args, { windowsHide: true })
     this.process = child
+    let resolveMode: (mode: AudioMode) => void = () => undefined
+    const decided = new Promise<AudioMode>((resolve) => { resolveMode = resolve })
+    // o componente diz qual modo conseguiu: o novo (sem o app) ou o reserva (só sem o Discord)
+    const fallbackTimer = setTimeout(() => resolveMode(hwnd ? 'window-app' : 'exclude-discord'), 4000)
 
     let pending: Buffer = Buffer.alloc(0)
     child.stdout.on('data', (chunk: Buffer) => {
@@ -68,24 +79,39 @@ export class AudioHelper {
       lines += chunk.toString('utf8')
       const end = lines.lastIndexOf('\n')
       if (end < 0) return
-      for (const status of parseLines(lines.slice(0, end))) if (!owner.isDestroyed()) owner.send('velun:audio:status', status)
+      for (const status of parseLines(lines.slice(0, end))) {
+        if (status.event === 'started') {
+          clearTimeout(fallbackTimer)
+          resolveMode(hwnd ? 'window-app' : status.data.mode === 'exclude-discord-and-app' ? 'exclude-discord-and-app' : 'exclude-discord')
+        }
+        if (!owner.isDestroyed()) owner.send('velun:audio:status', status)
+      }
       lines = lines.slice(end + 1)
     })
     child.on('error', (error) => { if (!owner.isDestroyed()) owner.send('velun:audio:status', { event: 'error', data: { message: error.message } }) })
     child.on('exit', (code) => {
+      clearTimeout(fallbackTimer)
+      resolveMode(hwnd ? 'window-app' : 'exclude-discord')
       if (this.process === child) this.process = null
       if (!owner.isDestroyed()) owner.send('velun:audio:status', { event: 'exited', data: { code } })
     })
-    return { mode }
+    return { mode: await decided }
   }
 
   stop(): void {
+    void this.stopAndWait(2000)
+  }
+
+  /** Pede o encerramento (fecha o stdin) e espera o processo sair; passado o prazo, encerra à força. */
+  stopAndWait(timeoutMs: number): Promise<void> {
     const child = this.process
     this.process = null
-    if (!child) return
-    // fechar o stdin pede o encerramento; se não sair em 2 s, encerra à força
-    child.stdin.end()
-    setTimeout(() => { if (child.exitCode === null) child.kill() }, 2000).unref()
+    if (!child || child.exitCode !== null) return Promise.resolve()
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => { child.kill(); resolve() }, timeoutMs)
+      child.once('exit', () => { clearTimeout(timer); resolve() })
+      child.stdin.end()
+    })
   }
 }
 

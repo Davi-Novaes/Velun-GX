@@ -30,7 +30,7 @@ describe('UpdateBanner', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Nova versão do Velun Gx pronta (0.3.0)')
     await userEvent.setup().click(screen.getByRole('button', { name: 'Reiniciar e atualizar' }))
     expect(update.install).toHaveBeenCalled()
-    expect(screen.getByRole('status')).toHaveTextContent('Instalando a versão 0.3.0')
+    expect(screen.getByRole('status')).toHaveTextContent('Instalando a versão 0.3.0… Uma janela de instalação vai aparecer')
   })
 
   it('mostra o download em andamento e troca pelo botão quando termina', () => {
@@ -44,6 +44,16 @@ describe('UpdateBanner', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Baixando a versão 0.3.0 do Velun Gx… 42%')
     act(() => notify('0.3.0'))
     expect(screen.getByRole('button', { name: 'Reiniciar e atualizar' })).toBeInTheDocument()
+  })
+
+  it('avisa quando a instalação anterior não concluiu e permite tentar de novo', async () => {
+    const { update } = installBridge({ version: '0.3.0' })
+    ;(update as Record<string, unknown>).failed = vi.fn(async () => ({ version: '0.3.0' }))
+    render(<UpdateBanner />)
+    expect(await screen.findByRole('alert')).toHaveTextContent('A atualização para a versão 0.3.0 não foi concluída')
+    expect(screen.getByRole('link', { name: 'Baixar instalador' })).toHaveAttribute('href', '/downloads/VelunGx-Setup.exe')
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Tentar de novo' }))
+    expect(update.install).toHaveBeenCalled()
   })
 
   it('mostra a versão que já estava baixada ao abrir a página', async () => {

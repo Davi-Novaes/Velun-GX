@@ -8,8 +8,8 @@ let sources = []
 let selected = null
 
 const HINTS = {
-  screen: 'Na tela inteira o som vai sem a call do Discord.',
-  window: 'Na janela vai só o som daquele programa (ou o PC sem o Discord, conforme a opção de áudio).',
+  screen: 'O áudio da tela é compartilhado automaticamente. Quem assiste controla o volume.',
+  window: 'O áudio do aplicativo é compartilhado automaticamente, quando disponível.',
 }
 
 function displayName(source) {

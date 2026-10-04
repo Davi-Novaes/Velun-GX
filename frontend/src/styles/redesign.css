@@ -1,7 +1,7 @@
-/* DiscordMeet · interface de transmissão, com controles persistentes e alvos de toque reais. */
+/* Velun Gx · interface de transmissão, com controles persistentes e alvos de toque reais. */
 .workspace {
   --ws-bg: #111318; --ws-panel: #191c24; --ws-text: #edf0f7; --ws-muted: #929bad; --ws-accent: #8b7cf8;
-  grid-template-columns: 76px 258px minmax(0, 1fr); font-size: 14px; font-family: Inter, 'Segoe UI', sans-serif;
+  grid-template-columns: 76px 258px minmax(0, 1fr); font-size: 14px; font-family: var(--font);
   background: #101217; color: var(--ws-text); min-height: 0;
 }
 .workspace button { -webkit-tap-highlight-color: transparent; font-family: inherit; }
@@ -197,3 +197,7 @@
 /* Coluna de servidores: só rola na vertical (no Windows aparecia uma barra horizontal e ícones cortados) */
 .workspace .server-rail { overflow-x: hidden; overflow-y: auto; scrollbar-width: none; }
 .workspace .server-rail::-webkit-scrollbar { display: none; }
+.password-form { display: flex; flex-direction: column; gap: 6px; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); }
+.password-form h3 { margin: 0 0 4px; font-size: 16px; }
+.password-form .btn { align-self: flex-start; margin-top: 8px; }
+.password-required { background: color-mix(in srgb, var(--warn) 14%, transparent); border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); border-radius: var(--radius-sm); padding: 10px 12px; margin: 0 0 6px; font-size: 14px; }

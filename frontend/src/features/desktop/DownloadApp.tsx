@@ -44,7 +44,7 @@ export function DownloadApp({ compact = false }: { compact?: boolean }) {
   if (bridge) {
     if (compact) return null
     const outdated = latest && isNewerVersion(latest, bridge.version)
-    return <p className="muted small download-app-version">Você está usando o Velun Gx {bridge.version}{outdated ? ` · a versão ${latest} será instalada ao fechar o app` : ''}.</p>
+    return <p className="muted small download-app-version">Você está usando o Velun Gx {bridge.version}{outdated ? ` · a versão ${latest} será instalada na próxima vez que você abrir o app` : ''}.</p>
   }
   if (!latest) return null
   if (compact) {
@@ -54,7 +54,7 @@ export function DownloadApp({ compact = false }: { compact?: boolean }) {
     <div className="download-app">
       <div>
         <strong>Velun Gx para Windows</strong>
-        <small className="muted">Transmita a tela inteira com o som do PC sem a call do Discord. Versão {latest} · Windows 11.</small>
+        <small className="muted">Compartilhe telas e aplicativos com áudio integrado. Versão {latest} · Windows 10 (2004+) e 11.</small>
       </div>
       <a className="btn btn-primary" href={DOWNLOAD_URL} download>Baixar</a>
     </div>

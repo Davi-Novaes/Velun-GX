@@ -26,6 +26,7 @@ internal static class AccountEndpoints
         auth.MapPost("/register", RegisterAsync).WithRateLimit("auth-register", RateLimitPartition.ClientIp).AddEndpointFilter(ValidateCsrfAsync);
         auth.MapPost("/login", LoginAsync).WithRateLimit("auth-login", RateLimitPartition.ClientIp).AddEndpointFilter(ValidateCsrfAsync);
         auth.MapPatch("/me", UpdateProfileAsync).RequireAuthorization(AccountAuthentication.Policy).WithRateLimit("community-write", RateLimitPartition.ClientIp).AddEndpointFilter(ValidateCsrfAsync);
+        auth.MapPost("/password", ChangePasswordAsync).RequireAuthorization(AccountAuthentication.Policy).WithRateLimit("auth-login", RateLimitPartition.ClientIp).AddEndpointFilter(ValidateCsrfAsync);
         auth.MapPost("/logout", LogoutAsync).RequireAuthorization(AccountAuthentication.Policy).AddEndpointFilter(ValidateCsrfAsync);
     }
 
@@ -70,6 +71,7 @@ internal static class AccountEndpoints
         }
         var user = await accounts.LoginAsync(body.Username!, body.Password, ct);
         if (user is null) return Error(401, "INVALID_CREDENTIALS", "Usuário ou senha incorretos.");
+        if (user.IsBanned) return Error(403, "ACCOUNT_BANNED", BanMessage(user.BanReason));
         await AccountAuthentication.SignInAsync(http, user, db, clock, ct);
         return Results.Ok(Profile(user));
     }
@@ -92,6 +94,18 @@ internal static class AccountEndpoints
         return Results.Ok(Profile(user));
     }
 
+    /// <summary>A pessoa troca a própria senha. Os outros logins (outros PCs, app) saem; este continua com uma sessão nova.</summary>
+    private static async Task<IResult> ChangePasswordAsync(ChangePasswordBody body, HttpContext http, AccountService accounts, AppDbContext db, TimeProvider clock, CancellationToken ct)
+    {
+        var id = Guid.Parse(http.User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        UserAccount? user;
+        try { user = await accounts.ChangeOwnPasswordAsync(id, body.CurrentPassword, body.NewPassword, body.ConfirmPassword, ct); }
+        catch (ArgumentException ex) { return Error(400, "VALIDATION_ERROR", ex.Message); }
+        if (user is null) return Error(400, "INVALID_CURRENT_PASSWORD", "A senha atual está incorreta.");
+        await AccountAuthentication.SignInAsync(http, user, db, clock, ct);
+        return Results.Ok(Profile(user));
+    }
+
     private static async Task<IResult> LogoutAsync(HttpContext http, AppDbContext db, TimeProvider clock, CancellationToken ct)
     {
         var id = Guid.Parse(http.User.FindFirstValue(AccountAuthentication.SessionClaim)!);
@@ -102,9 +116,11 @@ internal static class AccountEndpoints
         return Results.NoContent();
     }
 
-    private static object Profile(UserAccount user) => new { user.Id, user.Username, user.Nickname, Name = user.ShownName, user.Avatar, user.CreatedAt, user.LastLoginAt };
+    private static object Profile(UserAccount user) => new { user.Id, user.Username, user.Nickname, Name = user.ShownName, user.Avatar, user.CreatedAt, user.LastLoginAt, user.MustChangePassword };
+    internal static string BanMessage(string? reason) => "Esta conta foi banida pelo administrador." + (reason is null ? "" : $" Motivo: {reason}");
     private static IResult Error(int status, string code, string message) => Results.Problem(Problems.Create(status, code, "Conta", message));
     private sealed record RegisterBody(string Username, string Password, string ConfirmPassword);
     private sealed record LoginBody(string Username, string Password);
     private sealed record ProfileBody(string? Nickname);
+    private sealed record ChangePasswordBody(string CurrentPassword, string NewPassword, string ConfirmPassword);
 }

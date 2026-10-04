@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 
 namespace VelunAudio;
 
-// Interop mínimo da captura de áudio por processo (Windows 11 / build 20348+).
+// Interop mínimo da captura de áudio por processo (Windows 10 2004 / build 19041+ e Windows 11).
 // Referência: exemplo "ApplicationLoopback" da Microsoft (ActivateAudioInterfaceAsync + VAD\Process_Loopback).
 
 internal enum ProcessLoopbackMode

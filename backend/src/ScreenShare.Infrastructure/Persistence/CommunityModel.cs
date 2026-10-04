@@ -37,6 +37,8 @@ internal static class CommunityModel
             e.Property(x => x.Avatar).HasMaxLength(256);
             e.Property(x => x.Nickname).HasMaxLength(DisplayName.MaxLength * 4);
             e.Ignore(x => x.ShownName);
+            e.Ignore(x => x.IsBanned);
+            e.Property(x => x.BanReason).HasMaxLength(UserAccount.BanReasonMaxLength * 4);
             e.HasIndex(x => x.GuestId).IsUnique();
             e.HasOne<Guest>().WithMany().HasForeignKey(x => x.GuestId).OnDelete(DeleteBehavior.Restrict);
         });
@@ -54,9 +56,20 @@ internal static class CommunityModel
             e.ToTable("server_members");
             e.HasKey(x => new { x.ServerId, x.UserId });
             e.Property(x => x.Role).HasMaxLength(32).IsRequired();
+            e.HasOne<ServerRole>().WithMany().HasForeignKey(x => x.ServerRoleId).OnDelete(DeleteBehavior.SetNull);
             e.HasIndex(x => new { x.UserId, x.ServerId });
             e.HasOne<CommunityServer>().WithMany().HasForeignKey(x => x.ServerId).OnDelete(DeleteBehavior.Cascade);
             e.HasOne<UserAccount>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
+        });
+        modelBuilder.Entity<ServerRole>(e =>
+        {
+            e.ToTable("server_roles");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).ValueGeneratedNever();
+            e.Property(x => x.Name).HasMaxLength(40).IsRequired();
+            e.Property(x => x.Color).HasMaxLength(7).IsRequired();
+            e.HasIndex(x => new { x.ServerId, x.Position });
+            e.HasOne<CommunityServer>().WithMany().HasForeignKey(x => x.ServerId).OnDelete(DeleteBehavior.Cascade);
         });
         modelBuilder.Entity<Channel>(e =>
         {

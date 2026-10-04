@@ -9,6 +9,38 @@ namespace ScreenShare.IntegrationTests;
 
 public sealed class CommunityApiTests(ApiFactory api)
 {
+    [Fact]
+    public async Task Custom_roles_enforce_hierarchy_scope_and_delegated_permissions()
+    {
+        using var owner = await Account(); using var moderator = await Account(); using var member = await Account(); using var equal = await Account();
+        var (server, channel) = await Create(owner);
+        await JoinServer(owner, moderator, server); await JoinServer(owner, member, server); await JoinServer(owner, equal, server);
+        var moderatorId = (await moderator.GetFromJsonAsync<JsonElement>("/api/v1/auth/me", Ct)).GetProperty("id").GetString()!;
+        var memberId = (await member.GetFromJsonAsync<JsonElement>("/api/v1/auth/me", Ct)).GetProperty("id").GetString()!;
+        var equalId = (await equal.GetFromJsonAsync<JsonElement>("/api/v1/auth/me", Ct)).GetProperty("id").GetString()!;
+        var role = await Json(await Send(owner, $"/servers/{server}/roles", new { name = "Moderador", color = "#ab87ef", position = 50, permissions = 63 }));
+        var roleId = role.GetProperty("id").GetString();
+        Assert.Equal(HttpStatusCode.NoContent, (await Send(owner, $"/servers/{server}/members/{moderatorId}/role", new { roleId }, "PUT")).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await Send(owner, $"/servers/{server}/members/{equalId}/role", new { roleId }, "PUT")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(member, $"/servers/{server}/roles", new { name = "Admin", color = "#ffffff", position = 99, permissions = 127 })).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(moderator, $"/servers/{server}/roles", new { name = "Acima", color = "#ffffff", position = 50, permissions = 1 })).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(moderator, $"/servers/{server}/roles", new { name = "Escalada", color = "#ffffff", position = 10, permissions = 64 })).StatusCode);
+        var lower = await Json(await Send(moderator, $"/servers/{server}/roles", new { name = "Ajudante", color = "#ffffff", position = 10, permissions = 4 }));
+        var lowerId = lower.GetProperty("id").GetString();
+        Assert.Equal(HttpStatusCode.NoContent, (await Send(moderator, $"/servers/{server}/members/{memberId}/role", new { roleId = lowerId }, "PUT")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(moderator, $"/servers/{server}/members/{moderatorId}/role", new { roleId = lowerId }, "PUT")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(moderator, $"/servers/{server}/members/{equalId}", method: "DELETE")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(member, $"/channels/{channel}", new { name = "Sem acesso" }, "PATCH")).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await Send(moderator, $"/channels/{channel}", new { name = "Jogos" }, "PATCH")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await Send(moderator, $"/servers/{server}/invites", new { })).StatusCode);
+        var (otherServer, _) = await Create(owner);
+        var foreign = await Json(await Send(owner, $"/servers/{otherServer}/roles", new { name = "Outro", color = "#ffffff", position = 5, permissions = 0 }));
+        Assert.Equal(HttpStatusCode.NotFound, (await Send(owner, $"/servers/{server}/members/{memberId}/role", new { roleId = foreign.GetProperty("id").GetString() }, "PUT")).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await Send(owner, $"/servers/{server}/roles/{lowerId}", method: "DELETE")).StatusCode);
+        var members = (await owner.GetFromJsonAsync<JsonElement>($"/api/v1/servers/{server}", Ct)).GetProperty("members");
+        Assert.Equal(JsonValueKind.Null, members.EnumerateArray().Single(m => m.GetProperty("id").GetString() == memberId).GetProperty("serverRoleId").ValueKind);
+    }
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
     private static async Task<HttpResponseMessage> Send(HttpClient client, string path, object? body = null, string method = "POST")
     {

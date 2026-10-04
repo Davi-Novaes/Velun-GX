@@ -1,6 +1,13 @@
 // Integração com o app desktop Velun Gx (Windows). No navegador comum, window.velun não existe e nada daqui roda.
 
-export type DesktopAudioMode = 'exclude-discord' | 'window-app'
+/**
+ * exclude-discord-and-app (0.2.6+): PC sem o Discord e sem o próprio Velun Gx — dá para ouvir os outros transmitindo.
+ * exclude-discord: modo reserva (inclui o som do app); a página silencia as outras transmissões para não dar eco.
+ */
+export type DesktopAudioMode = 'exclude-discord-and-app' | 'exclude-discord' | 'window-app' | 'system-loopback'
+// system-loopback: Windows 10 (sem captura por programa). Som do PC inteiro, inclusive a call do Discord, escolhido
+// pela pessoa. Tirar o som do próprio app depende do mesmo recurso do Windows (10 2004+/11), então as outras transmissões ficam
+// mudas para quem transmite (senão voltariam para a sala como eco).
 
 export interface VelunBridge {
   app: 'Velun Gx'
@@ -9,8 +16,11 @@ export interface VelunBridge {
   /** Ausente em versões antigas do app (0.1.0). */
   update?: {
     status(): Promise<{ version: string } | null>
-    onReady(callback: (update: { version: string }) => void): () => void
+    /** installing: o app já está aplicando (versão encontrada ao abrir). */
+    onReady(callback: (update: { version: string; installing?: boolean }) => void): () => void
     install(): Promise<boolean>
+    /** Ausente antes da 0.2.5: a última instalação não concluiu. */
+    failed?(): Promise<{ version: string } | null>
     /** Ausentes antes da 0.2.3. */
     progress?(): Promise<{ version: string; percent: number } | null>
     onProgress?(callback: (progress: { version: string; percent: number }) => void): () => void
@@ -22,6 +32,33 @@ export interface VelunBridge {
     onData(callback: (chunk: Uint8Array) => void): () => void
     onStatus(callback: (status: { event: string; data: Record<string, unknown> }) => void): () => void
   }
+}
+
+/** Só no modo reserva o som do próprio app entra na captura: aí as outras transmissões precisam ficar mudas. */
+export function mutesOtherStreams(mode: DesktopAudioMode | undefined): boolean {
+  return mode === 'exclude-discord' || mode === 'system-loopback'
+}
+
+/**
+ * O Windows deste PC permite tirar programas do som (Windows 10 2004+ ou 11)? undefined enquanto a verificação não terminou.
+ * Verificado uma vez ao carregar a página: a escolha do caminho de áudio acontece no clique, antes de qualquer espera.
+ */
+let processAudio: boolean | undefined
+export function desktopProcessAudio(): boolean | undefined {
+  return processAudio
+}
+export function checkDesktopAudio(bridge: VelunBridge | null = velunBridge()): void {
+  if (!bridge || processAudio !== undefined) return
+  bridge.audio.probe().then((result) => { processAudio = result.supported }).catch(() => { processAudio = false })
+}
+
+const PC_AUDIO_KEY = 'tj:pcAudioWin10'
+/** Windows 10: a pessoa aceitou transmitir o som do PC inteiro (inclui a call do Discord)? */
+export function pcAudioAllowed(): boolean {
+  try { return localStorage.getItem(PC_AUDIO_KEY) === '1' } catch { return false }
+}
+export function setPcAudioAllowed(allowed: boolean): void {
+  try { localStorage.setItem(PC_AUDIO_KEY, allowed ? '1' : '0') } catch { /* sem armazenamento */ }
 }
 
 export function velunBridge(): VelunBridge | null {

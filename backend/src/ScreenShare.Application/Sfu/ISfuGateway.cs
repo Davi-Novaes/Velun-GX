@@ -27,7 +27,9 @@ public interface ISfuGateway
     Task<bool> IsHealthyAsync(CancellationToken ct);
 }
 
-public sealed record SfuParticipant(string Sid, string Identity, string Name, string State, DateTimeOffset? JoinedAt, IReadOnlyList<SfuTrack> Tracks);
+/// <param name="ReceiveReport">Atributo "screen.rx" de quem assiste: fps recebido, travadas por minuto e perda, por transmissão. Só informativo.</param>
+/// <param name="StreamReport">Atributo "screen.report" que o próprio emissor publica (resolução, fps, formato). Só informativo.</param>
+public sealed record SfuParticipant(string Sid, string Identity, string Name, string State, DateTimeOffset? JoinedAt, IReadOnlyList<SfuTrack> Tracks, string? StreamReport = null, string? ReceiveReport = null);
 
 public sealed record SfuTrack(string Sid, string Source, string Kind, bool Muted);
 

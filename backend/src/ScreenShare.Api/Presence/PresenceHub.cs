@@ -10,7 +10,8 @@ using StackExchange.Redis;
 
 namespace ScreenShare.Api.Presence;
 
-public sealed record PresenceSubscription(Guid UserId, Guid SessionId, Guid ServerId, string SecurityStamp, DateTimeOffset HeartbeatAt);
+/// <param name="Client">User-Agent da página (app Velun Gx ou navegador), só para o painel de administração.</param>
+public sealed record PresenceSubscription(Guid UserId, Guid SessionId, Guid ServerId, string SecurityStamp, DateTimeOffset HeartbeatAt, string Client = "");
 public sealed class PresenceRegistry
 {
     public ConcurrentDictionary<string, PresenceSubscription> Subscriptions { get; } = new(StringComparer.Ordinal);
@@ -34,7 +35,8 @@ public sealed partial class PresenceHub(CommunityService communities, AppDbConte
         var user = Guid.Parse(Context.User!.FindFirstValue(ClaimTypes.NameIdentifier)!);
         var sid = Guid.Parse(Context.User!.FindFirstValue(AccountAuthentication.SessionClaim)!);
         await communities.AccessAsync(user, id, false, Context.ConnectionAborted);
-        registry.Subscriptions[Context.ConnectionId] = new PresenceSubscription(user, sid, id, Context.User!.FindFirstValue("security_stamp")!, clock.GetUtcNow());
+        var agent = Context.GetHttpContext()?.Request.Headers.UserAgent.ToString() ?? "";
+        registry.Subscriptions[Context.ConnectionId] = new PresenceSubscription(user, sid, id, Context.User!.FindFirstValue("security_stamp")!, clock.GetUtcNow(), agent.Length > 300 ? agent[..300] : agent);
         await Heartbeat();
         await Clients.Caller.SendAsync("Presence", new { serverId = id, channels = await communities.PresenceAsync(user, id, Context.ConnectionAborted) });
     }
@@ -45,6 +47,10 @@ public sealed partial class PresenceHub(CommunityService communities, AppDbConte
         var now = clock.GetUtcNow();
         if (!await db.AccountSessions.AnyAsync(s => s.Id == subscription.SessionId && s.UserId == subscription.UserId && s.RevokedAt == null && s.ExpiresAt > now && db.Users.Any(u => u.Id == s.UserId && u.SecurityStamp == subscription.SecurityStamp), Context.ConnectionAborted)) { Context.Abort(); return; }
         registry.Subscriptions[Context.ConnectionId] = subscription with { HeartbeatAt = now };
+        // "visto por último": no máximo uma escrita a cada 2 minutos por pessoa
+        var stale = now.AddMinutes(-2);
+        await db.Users.Where(u => u.Id == subscription.UserId && (u.LastSeenAt == null || u.LastSeenAt < stale))
+            .ExecuteUpdateAsync(u => u.SetProperty(x => x.LastSeenAt, now), Context.ConnectionAborted);
         await redis.GetDatabase().StringSetAsync("presence:app:" + Context.ConnectionId, subscription.UserId.ToString(), TimeSpan.FromSeconds(60));
     }
 

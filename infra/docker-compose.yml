@@ -43,6 +43,9 @@ services:
       # dev roda em HTTP; em produção (HTTPS) o cookie é sempre Secure
       Session__SecureCookie: ${SESSION_SECURE_COOKIE:-false}
       Database__MigrateOnStartup: "true"
+      # painel /admin: login próprio, definido por infra/scripts/set-admin.sh (vazio = painel desligado)
+      Admin__Username: ${ADMIN_USERNAME:-}
+      Admin__PasswordHash: ${ADMIN_PASSWORD_HASH:-}
       Account__KeysPath: /var/lib/screenshare/keys
       # só o Traefik (rede interna) pode informar o IP real do cliente
       ReverseProxy__TrustedNetworks__0: 172.30.0.0/24

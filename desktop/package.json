@@ -1,8 +1,8 @@
 {
   "name": "velun-gx",
   "productName": "Velun Gx",
-  "version": "0.2.3",
-  "description": "Velun Gx: transmissão de tela com som do PC sem a call do Discord",
+  "version": "0.2.9",
+  "description": "Velun Gx: compartilhamento de tela e áudio em tempo real",
   "private": true,
   "main": "out/main.js",
   "scripts": {

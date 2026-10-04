@@ -1,11 +1,13 @@
 import { X509Certificate } from 'node:crypto'
 import path from 'node:path'
-import { app, BrowserWindow, dialog, ipcMain, Menu, session, shell, type Session } from 'electron'
-import { autoUpdater } from 'electron-updater'
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, session, shell, type Session } from 'electron'
 import { AudioHelper, type SelectedSource } from './audioHelper'
 import { PINNED_CERTIFICATES, PINNED_HOSTS, SERVER_URL } from './config'
 import { choose } from './picker'
 import { runSmoke } from './smoke'
+import { runLoopbackSmoke } from './smokeLoopback'
+import { runShareSmoke } from './smokeShare'
+import { installNow, startAutoUpdate, updateState } from './updater'
 
 // Transmissão não pode desacelerar com a janela minimizada ou atrás de um jogo
 app.commandLine.appendSwitch('disable-renderer-backgrounding')
@@ -16,10 +18,6 @@ app.setAppUserModelId('gx.velun.app')
 const audio = new AudioHelper()
 let mainWindow: BrowserWindow | null = null
 let selectedSource: SelectedSource | null = null
-/** Versão nova já baixada e pronta para instalar (a página mostra o botão "Reiniciar e atualizar"). */
-let readyUpdate: { version: string } | null = null
-/** Versão nova sendo baixada agora (a página mostra "Baixando atualização… N%"). */
-let downloading: { version: string; percent: number } | null = null
 
 function isServer(url: string): boolean {
   try { return new URL(url).origin === SERVER_URL.origin } catch { return false }
@@ -54,44 +52,12 @@ function pinServerCertificate(ses: Session): void {
   })
 }
 
-/** Baixa versões novas em segundo plano (de /downloads/ no servidor) e instala ao fechar o app. */
-function startAutoUpdate(): void {
-  if (!app.isPackaged) return
-  // o atualizador usa uma sessão de rede própria: precisa da mesma fixação de certificado
-  pinServerCertificate(session.fromPartition('electron-updater', { cache: false }))
-  // testes: aponta o atualizador para outra pasta (ex.: http://127.0.0.1:8099/) sem tocar no servidor
-  if (process.env.VELUN_UPDATE_URL) autoUpdater.setFeedURL({ provider: 'generic', url: process.env.VELUN_UPDATE_URL })
-  autoUpdater.autoDownload = true
-  // Testes (feed trocado ou autoteste) NUNCA instalam ao fechar: o instalador usa a mesma pasta do app
-  // instalado da pessoa e fecharia/substituiria o Velun Gx dela.
-  autoUpdater.autoInstallOnAppQuit = !process.env.VELUN_UPDATE_URL && process.env.VELUN_SMOKE !== '1'
-  autoUpdater.on('error', () => undefined) // sem rede/servidor: tenta de novo mais tarde
-  autoUpdater.on('update-available', (info) => {
-    downloading = { version: info.version, percent: 0 }
-    mainWindow?.webContents.send('velun:update-progress', downloading)
-  })
-  autoUpdater.on('download-progress', (progress) => {
-    if (!downloading) return
-    const percent = Math.floor(progress.percent)
-    if (percent === downloading.percent) return // no máximo uma mensagem por ponto percentual
-    downloading = { ...downloading, percent }
-    mainWindow?.webContents.send('velun:update-progress', downloading)
-  })
-  autoUpdater.on('update-downloaded', (info) => {
-    downloading = null
-    readyUpdate = { version: info.version }
-    mainWindow?.webContents.send('velun:update-ready', readyUpdate)
-  })
-  const check = () => { void autoUpdater.checkForUpdates().catch(() => undefined) }
-  check()
-  setInterval(check, 4 * 60 * 60 * 1000).unref()
-}
-
 function start(): void {
   Menu.setApplicationMenu(null)
   const ses = session.defaultSession
   pinServerCertificate(ses)
-  startAutoUpdate()
+  // o componente de áudio roda de dentro da pasta do app: precisa ter saído para o instalador trocar os arquivos
+  startAutoUpdate(() => mainWindow, pinServerCertificate, () => audio.stopAndWait(2000))
 
   // Permissões só para o próprio sistema
   const allowed = new Set(['media', 'display-capture', 'fullscreen', 'notifications', 'clipboard-sanitized-write', 'speaker-selection'])
@@ -102,21 +68,23 @@ function start(): void {
   ses.setDisplayMediaRequestHandler((request, callback) => {
     const parent = mainWindow
     if (!parent || !isServer(request.securityOrigin)) return callback({})
-    choose(parent).then((choice) => {
+    // autoteste: escolhe a primeira tela sem abrir o seletor
+    const picked = process.env.VELUN_SMOKE_PICK === '1' ? desktopCapturer.getSources({ types: ['screen'] }).then(([first]) => (first ? { id: first.id, name: first.name, kind: 'screen' as const } : null)) : choose(parent)
+    picked.then((choice) => {
       selectedSource = choice
-      callback(choice ? { video: { id: choice.id, name: choice.name } } : {})
+      // Áudio pedido pela página = som do PC inteiro (Windows 10, onde não existe captura por programa e a
+      // pessoa escolheu transmitir mesmo assim). No Windows 11 a página não pede: o som vem do VelunAudio.
+      callback(choice ? { video: { id: choice.id, name: choice.name }, ...(request.audioRequested ? { audio: 'loopback' as const } : {}) } : {})
     }).catch(() => callback({}))
   }, { useSystemPicker: false })
 
   ipcMain.handle('velun:selected-source', (event) => (event.sender === mainWindow?.webContents ? selectedSource : null))
-  ipcMain.handle('velun:update:status', (event) => (event.sender === mainWindow?.webContents ? readyUpdate : null))
-  ipcMain.handle('velun:update:progress', (event) => (event.sender === mainWindow?.webContents ? downloading : null))
-  ipcMain.handle('velun:update:install', (event) => {
-    if (event.sender !== mainWindow?.webContents || !readyUpdate) return false
-    audio.stop()
-    // instala sem perguntar nada e abre o app de novo
-    setImmediate(() => autoUpdater.quitAndInstall(true, true))
-    return true
+  ipcMain.handle('velun:update:status', (event) => (event.sender === mainWindow?.webContents ? updateState().ready : null))
+  ipcMain.handle('velun:update:progress', (event) => (event.sender === mainWindow?.webContents ? updateState().downloading : null))
+  ipcMain.handle('velun:update:failed', (event) => (event.sender === mainWindow?.webContents ? updateState().failed : null))
+  ipcMain.handle('velun:update:install', async (event) => {
+    if (event.sender !== mainWindow?.webContents) return false
+    return installNow()
   })
   ipcMain.handle('velun:audio:probe', () => audio.probe())
   ipcMain.handle('velun:audio:start', async (event, scope: unknown) => {
@@ -176,6 +144,9 @@ function createWindow(): void {
   })
 
   if (process.env.VELUN_SMOKE === '1') runSmoke(window)
+  if (process.env.VELUN_SMOKE_LOOPBACK === '1') runLoopbackSmoke(window)
+  // só contra o site local de desenvolvimento: cria conta e servidor de teste
+  if (process.env.VELUN_SMOKE_SHARE === '1' && /^http:\/\/localhost(:\d+)?$/.test(SERVER_URL.origin)) runShareSmoke(window)
   void window.loadURL(new URL('/app', SERVER_URL).toString())
 }
 

@@ -64,6 +64,15 @@ namespace ScreenShare.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(256)")
                         .HasColumnName("avatar");
 
+                    b.Property<string>("BanReason")
+                        .HasMaxLength(800)
+                        .HasColumnType("character varying(800)")
+                        .HasColumnName("ban_reason");
+
+                    b.Property<DateTimeOffset?>("BannedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("banned_at");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
@@ -75,6 +84,14 @@ namespace ScreenShare.Infrastructure.Persistence.Migrations
                     b.Property<DateTimeOffset?>("LastLoginAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("last_login_at");
+
+                    b.Property<DateTimeOffset?>("LastSeenAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_seen_at");
+
+                    b.Property<bool>("MustChangePassword")
+                        .HasColumnType("boolean")
+                        .HasColumnName("must_change_password");
 
                     b.Property<string>("Nickname")
                         .HasMaxLength(128)
@@ -288,13 +305,59 @@ namespace ScreenShare.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(32)")
                         .HasColumnName("role");
 
+                    b.Property<Guid?>("ServerRoleId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("server_role_id");
+
                     b.HasKey("ServerId", "UserId")
                         .HasName("pk_server_members");
+
+                    b.HasIndex("ServerRoleId")
+                        .HasDatabaseName("ix_server_members_server_role_id");
 
                     b.HasIndex("UserId", "ServerId")
                         .HasDatabaseName("ix_server_members_user_id_server_id");
 
                     b.ToTable("server_members", (string)null);
+                });
+
+            modelBuilder.Entity("ScreenShare.Domain.Communities.ServerRole", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Color")
+                        .IsRequired()
+                        .HasMaxLength(7)
+                        .HasColumnType("character varying(7)")
+                        .HasColumnName("color");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("name");
+
+                    b.Property<int>("Permissions")
+                        .HasColumnType("integer")
+                        .HasColumnName("permissions");
+
+                    b.Property<int>("Position")
+                        .HasColumnType("integer")
+                        .HasColumnName("position");
+
+                    b.Property<Guid>("ServerId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("server_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_server_roles");
+
+                    b.HasIndex("ServerId", "Position")
+                        .HasDatabaseName("ix_server_roles_server_id_position");
+
+                    b.ToTable("server_roles", (string)null);
                 });
 
             modelBuilder.Entity("ScreenShare.Domain.Guests.Guest", b =>
@@ -631,12 +694,28 @@ namespace ScreenShare.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasConstraintName("fk_server_members_community_servers_server_id");
 
+                    b.HasOne("ScreenShare.Domain.Communities.ServerRole", null)
+                        .WithMany()
+                        .HasForeignKey("ServerRoleId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_server_members_server_roles_server_role_id");
+
                     b.HasOne("ScreenShare.Domain.Accounts.UserAccount", null)
                         .WithMany()
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_server_members_users_user_id");
+                });
+
+            modelBuilder.Entity("ScreenShare.Domain.Communities.ServerRole", b =>
+                {
+                    b.HasOne("ScreenShare.Domain.Communities.CommunityServer", null)
+                        .WithMany()
+                        .HasForeignKey("ServerId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_server_roles_community_servers_server_id");
                 });
 
             modelBuilder.Entity("ScreenShare.Domain.Media.StreamSession", b =>

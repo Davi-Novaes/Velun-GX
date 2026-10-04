@@ -52,9 +52,8 @@ test('carga de canais com participantes WebRTC reais', async ({ baseURL }) => {
         await expect(p.page.getByRole('button', { name: /Compartilhar tela/ })).toBeEnabled()
       }
       await owner.page.getByRole('button', { name: /Compartilhar tela/ }).click()
-      await owner.page.getByRole('dialog').getByLabel('Resolução').selectOption('720p')
-      await owner.page.getByRole('button', { name: 'Começar transmissão' }).click()
-      await expect(owner.page.locator('.local-preview')).toBeVisible()
+      await owner.page.getByRole('dialog').getByRole('button', { name: 'Tela inteira', exact: false }).click()
+      await expect(owner.page.locator('.stage-tile.is-local')).toBeVisible()
       for (const p of people.slice(1)) await expect.poll(async () => (await received(p)).frames).toBeGreaterThan(0)
     }
     const startStats = before(), start = await Promise.all(viewers.map(received))

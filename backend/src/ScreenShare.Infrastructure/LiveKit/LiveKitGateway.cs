@@ -155,7 +155,13 @@ public sealed partial class LiveKitGateway(
             Sid: t.Str("sid") ?? "",
             Source: t.EnumValue("source", "unknown"),
             Kind: t.EnumValue("type", "unknown"),
-            Muted: t.Bool("muted"))).ToList());
+            Muted: t.Bool("muted"))).ToList(),
+        StreamReport: Attribute(p, "screen.report"),
+        ReceiveReport: Attribute(p, "screen.rx"));
+
+    private static string? Attribute(JsonElement p, string name) =>
+        p.TryGetProperty("attributes", out var attributes) && attributes.ValueKind == JsonValueKind.Object
+            && attributes.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
     [LoggerMessage(Level = LogLevel.Error, Message = "sfu.api_error {Method} status={StatusCode} body={Body}")]
     private static partial void LogTwirpError(ILogger logger, string method, int statusCode, string body);

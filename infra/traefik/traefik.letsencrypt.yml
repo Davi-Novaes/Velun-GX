@@ -1,0 +1,49 @@
+# Traefik do servidor Ubuntu com certificado Let's Encrypt (sem aviso de "não seguro").
+# Porta 80: só a validação do Let's Encrypt e o redirecionamento para https://…:8443 (onde o site e o app estão).
+# HTTPS escuta na 443 do container; o host publica 443 e 8443 (docker-compose.letsencrypt.yml).
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: ":8443"
+          scheme: https
+          permanent: true
+  websecure:
+    address: ":443"
+    http:
+      tls:
+        certResolver: le
+        domains:
+          - main: discordmeet.ddns.net
+
+certificatesResolvers:
+  le:
+    acme:
+      # guardado num volume: o certificado sobrevive a recriar o container; renovação automática ~30 dias antes de vencer
+      storage: /letsencrypt/acme.json
+      httpChallenge:
+        entryPoint: web
+
+providers:
+  docker:
+    exposedByDefault: false
+    network: screenshare_app
+  file:
+    # certificado reserva (autoassinado) para acesso pelo IP ou se o Let's Encrypt falhar
+    filename: /etc/traefik/dynamic.yml
+
+ping: {}
+
+api:
+  dashboard: false
+
+log:
+  level: INFO
+  format: json
+
+accessLog:
+  format: json
+  filters:
+    statusCodes: ["400-599"]

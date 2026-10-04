@@ -1,0 +1,59 @@
+.server-settings-page { position: fixed; inset: 0; z-index: 200; display: flex; color: #f4f4f7; background: #0c0d10; font: inherit; }
+.settings-navigation { width: 260px; flex-shrink: 0; padding: 44px 22px; background: #08090b; border-right: 1px solid #222329; overflow-y: auto; }
+.settings-navigation h1 { font-size: 22px; margin: 16px 0 28px; overflow-wrap: anywhere; }
+.settings-navigation nav { display: grid; gap: 6px; }
+.settings-navigation nav button { display: flex; align-items: center; justify-content: space-between; text-align: left; padding: 12px 14px; border: 0; border-radius: 8px; color: #b4b4c2; background: transparent; cursor: pointer; font: inherit; }
+.settings-navigation nav button:hover { background: #191a20; color: white; }
+.settings-navigation nav button[aria-current] { background: #242038; color: #d4c8ff; }
+.settings-navigation p { margin-top: 30px; color: #747586; line-height: 1.8; font-size: 12px; }
+.settings-body { flex: 1; min-width: 0; overflow-y: auto; }
+.settings-topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 32px; border-bottom: 1px solid #222329; color: #9696a6; }
+.settings-content { max-width: 1040px; margin: auto; padding: 36px; }
+.settings-content h2 { font-size: 28px; margin: 0 0 12px; }
+.settings-content > p { margin-bottom: 28px; line-height: 1.65; }
+.settings-content form > .field { max-width: 560px; }
+.settings-danger { margin-top: 48px; padding-top: 24px; border-top: 1px solid #302227; }
+.settings-success { color: #78d8aa; padding: 14px 16px; background: #10251b; border-radius: 8px; line-height: 1.5; }
+.settings-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 22px; }
+.settings-search { max-width: 420px; margin-bottom: 20px; }
+.settings-members { margin-top: 20px; display: grid; gap: 10px; }
+.settings-member-row { padding: 16px; border: 1px solid #25262f; border-radius: 12px; background: #111217; display: flex; align-items: center; gap: 14px; }
+.settings-member-name { flex: 1; min-width: 0; }
+.settings-member-name strong { display: block; overflow-wrap: anywhere; }
+.settings-member-name small { display: block; color: #88899b; margin-top: 6px; }
+.settings-member-row select { width: 190px; }
+.server-settings-page .role-layout { grid-template-columns: 220px minmax(0, 1fr); }
+.server-settings-page .role-layout nav { max-height: none; }
+.server-settings-page .role-layout form { min-width: 0; padding: 22px; border: 1px solid #292a35; border-radius: 12px; background: #121319; }
+.server-settings-page .role-permissions { margin: 20px 0; }
+.stream-floating-menu { position: fixed; z-index: 400; width: 248px; max-width: calc(100vw - 16px); max-height: min(330px, calc(100dvh - 16px)); overflow-y: auto; box-sizing: border-box; padding: 8px; border: 1px solid #353642; border-radius: 12px; background: #14151b; color: #e9e9f3; box-shadow: 0 14px 42px #0009; }
+.stream-floating-menu button { display: block; width: 100%; padding: 11px 12px; background: transparent; border: 0; border-radius: 6px; text-align: left; color: inherit; cursor: pointer; font: inherit; font-size: 13px; }
+.stream-floating-menu button:hover, .stream-floating-menu button:focus-visible { background: #332949; outline: 2px solid #9982e3; outline-offset: -2px; }
+.workspace .channel-link { display: grid; grid-template-columns: 20px minmax(0,1fr) 24px; gap: 5px; padding-right: 36px; }
+.workspace .channel-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace .channel-link small { margin: 0; text-align: center; min-width: 24px; }
+.workspace .channel-edit { right: 5px; width: 27px; }
+.share-source-options { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 26px 0; }
+.share-source-options button { display: grid; justify-items: center; gap: 14px; padding: 26px 16px; border: 1px solid #3a354e; background: #1b1925; color: #eee9ff; border-radius: 14px; cursor: pointer; font: inherit; }
+.share-source-options button:hover { border-color: #ac91ff; background: #302642; }
+.share-source-options small { color: #9994ad; }
+@media (max-width: 700px) {
+  .server-settings-page { flex-direction: column; }
+  .settings-navigation { width: 100%; box-sizing: border-box; padding: 16px; overflow-y: visible; border-right: 0; border-bottom: 1px solid #24252c; }
+  .settings-navigation h1 { font-size: 18px; margin: 8px 0 14px; }
+  .settings-navigation nav { display: flex; overflow-x: auto; gap: 4px; }
+  .settings-navigation nav button { white-space: nowrap; padding: 10px; gap: 8px; font-size: 12px; }
+  .settings-navigation p { display: none; }
+  .settings-topbar { padding: 12px 16px; font-size: 11px; }
+  .settings-topbar .btn { font-size: 11px; white-space: nowrap; }
+  .settings-content { padding: 24px 16px; }
+  .settings-content h2 { font-size: 23px; }
+  .server-settings-page .role-layout { grid-template-columns: 1fr; }
+  .server-settings-page .role-layout nav { display: flex; overflow-x: auto; }
+  .server-settings-page .role-layout nav button { flex-shrink: 0; }
+  .settings-member-row { flex-wrap: wrap; padding: 12px; gap: 10px; }
+  .settings-member-name { flex-basis: calc(100% - 58px); }
+  .settings-member-row select { width: auto; flex: 1; min-width: 120px; }
+  .share-source-options { gap: 10px; }
+  .share-source-options button { padding: 20px 10px; }
+}

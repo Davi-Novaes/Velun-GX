@@ -24,6 +24,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<AccountSession> AccountSessions => Set<AccountSession>();
     public DbSet<CommunityServer> Servers => Set<CommunityServer>();
     public DbSet<ServerMember> ServerMembers => Set<ServerMember>();
+    public DbSet<ServerRole> ServerRoles => Set<ServerRole>();
     public DbSet<Channel> Channels => Set<Channel>();
     public DbSet<ServerInvite> ServerInvites => Set<ServerInvite>();
 

@@ -4,6 +4,7 @@ import { RoomPage } from '../pages/RoomPage'
 import { AccountPage, AuthPage } from '../pages/AccountPage'
 import { WorkspacePage } from '../pages/WorkspacePage'
 import { InvitePage } from '../pages/InvitePage'
+import { AdminPage } from '../pages/AdminPage'
 import { UpdateBanner } from '../features/desktop/UpdateBanner'
 
 function NotFound() {
@@ -28,6 +29,7 @@ export const routes = [
   { path: '/login', element: <AuthPage /> },
   { path: '/register', element: <AuthPage key="register" register /> },
   { path: '/account', element: <AccountPage /> },
+  { path: '/admin', element: <AdminPage /> },
   { path: '/room/:code', element: <RoomPage /> },
   // formato curto alternativo: /s/ABC123
   { path: '/s/:code', element: <RoomPage /> },

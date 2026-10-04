@@ -12,6 +12,9 @@ import {
 import { readReport } from './telemetry'
 import type { JoinResponse } from '../api/contracts'
 import { APP_BUILD } from '../build'
+import { mutesOtherStreams } from '../desktop/velun'
+import { FreezeWindow, smoothPlayout } from './playoutBuffer'
+import { installH264BaselinePreference } from './h264Baseline'
 import { LiveKitScreenShare } from './LiveKitScreenShare'
 import {
   type ConnectionQualityLevel,
@@ -47,6 +50,8 @@ export class LiveKitRoomClient implements RoomClient {
   private diagnosticSamples = new Map<string, { bytes: number; timestamp: number }>()
   private appPingMs: number | undefined
   private reportedAt = 0
+  private receiveReportedAt = 0
+  private freezes = new Map<string, FreezeWindow>()
   private viewTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private viewQualities = new Map<string, VideoQuality>()
   private viewingSizes = new Map<string, { width: number; height: number }>()
@@ -57,8 +62,12 @@ export class LiveKitRoomClient implements RoomClient {
   private remoteAudioSuppressed = false
   /** Última lista de transmissões assistidas enviada à sala (atributo screen.watching). */
   private publishedWatching = ''
+  private pendingWatching: string | undefined
   private watchingTimer: ReturnType<typeof setTimeout> | undefined
-  constructor(private readonly publishing?: { authorize: () => Promise<void>; release: () => Promise<void> }) {}
+  constructor(private readonly publishing?: { authorize: () => Promise<void>; release: () => Promise<void> }) {
+    // H.264 negociado no perfil que o Chromium codifica pela placa de vídeo (ver h264Baseline.ts)
+    installH264BaselinePreference()
+  }
 
   setSignalingPing(ms: number): void { this.appPingMs = ms }
 
@@ -125,13 +134,16 @@ export class LiveKitRoomClient implements RoomClient {
       .map((p) => p.identity)
       .sort()
     const value = JSON.stringify(watched)
+    if (value === this.pendingWatching) return
     clearTimeout(this.watchingTimer)
+    this.pendingWatching = undefined
     if (value === this.publishedWatching) return
     // agrupa mudanças rápidas (ex.: "Ver todas") numa só atualização
+    this.pendingWatching = value
     this.watchingTimer = setTimeout(() => {
+      this.pendingWatching = undefined
       if (room !== this.room || room.state !== 'connected') return
-      this.publishedWatching = value
-      void room.localParticipant.setAttributes({ 'screen.watching': value }).catch(() => { this.publishedWatching = '' })
+      void room.localParticipant.setAttributes({ 'screen.watching': value }).then(() => { if (room === this.room) this.publishedWatching = value }).catch(() => { this.publishedWatching = '' })
     }, 400)
   }
 
@@ -166,7 +178,8 @@ export class LiveKitRoomClient implements RoomClient {
     this.room = room
     this.screenShare = new LiveKitScreenShare(room, join.policy, (share) => {
       // som do PC (sem o Discord) inclui o que este app toca: o som das outras transmissões voltaria para a sala
-      this.setRemoteAudioSuppressed(share?.desktopAudio === 'exclude-discord' && share.audioEnabled)
+      this.setRemoteAudioSuppressed(mutesOtherStreams(share?.desktopAudio) && share!.audioEnabled)
+      this.reportedAt = 0
       this.previewVersion++
       this.emit('localShareChanged', share)
       this.refresh()
@@ -198,8 +211,10 @@ export class LiveKitRoomClient implements RoomClient {
   }
 
   async disconnect(): Promise<void> {
+    clearTimeout(this.watchingTimer)
+    this.pendingWatching = undefined; this.publishedWatching = ''
     for (const timer of this.viewTimers.values()) clearTimeout(timer)
-    this.viewTimers.clear(); this.viewQualities.clear(); this.viewingSizes.clear(); this.pendingQualities.clear(); this.diagnosticSamples.clear(); this.reportedAt = 0
+    this.viewTimers.clear(); this.viewQualities.clear(); this.viewingSizes.clear(); this.pendingQualities.clear(); this.diagnosticSamples.clear(); this.freezes.clear(); this.reportedAt = 0; this.receiveReportedAt = 0
     const room = this.room
     if (!room) return
     this.leaving = true
@@ -243,6 +258,7 @@ export class LiveKitRoomClient implements RoomClient {
     const track = this.remotePublication(shareId, Track.Source.ScreenShare)?.videoTrack
     if (!track) return () => undefined
     // attach() permite ao adaptive stream observar o tamanho do elemento e pedir a camada certa
+    smoothPlayout('receiver' in track ? track.receiver : undefined)
     track.attach(element)
     return () => {
       track.detach(element)
@@ -252,6 +268,7 @@ export class LiveKitRoomClient implements RoomClient {
   attachShareAudio(shareId: string, element: HTMLAudioElement): () => void {
     const track = this.remotePublication(shareId, Track.Source.ScreenShareAudio)?.audioTrack
     if (!track) return () => undefined
+    smoothPlayout('receiver' in track ? track.receiver : undefined) // mesma folga do vídeo: som e imagem continuam juntos
     this.attachedAudio.set(element, track)
     if (!this.remoteAudioSuppressed) track.attach(element)
     return () => {
@@ -274,8 +291,16 @@ export class LiveKitRoomClient implements RoomClient {
     }
   }
 
+  /**
+   * Libera o som no navegador. O room.startAudio() do LiveKit tira o mudo de TODOS os áudios ligados
+   * (e.muted = false, de forma síncrona): quem você mutou voltaria a tocar ao ativar o som de outra pessoa.
+   * Os que estavam mutados voltam ao mudo logo em seguida, antes de tocar qualquer amostra.
+   */
   async startAudio(): Promise<void> {
-    await this.room?.startAudio()
+    const keepMuted = [...this.attachedAudio.keys()].filter((element) => element.muted)
+    const started = this.room?.startAudio()
+    for (const element of keepMuted) element.muted = true
+    await started
   }
 
   private remotePublication(identity: string, source: Track.Source): RemoteTrackPublication | undefined {
@@ -404,7 +429,17 @@ export class LiveKitRoomClient implements RoomClient {
         const packets = Number(s.packetsReceived ?? 0), lost = Math.max(0, Number(s.packetsLost ?? 0))
         const remote = s.remoteId ? report.get(String(s.remoteId)) : undefined
         const remoteLost = Number(remote?.packetsLost ?? 0)
-        output.push({ identity: p.identity, name: p.name || p.identity, local, rttMs: rtt, jitterMs: typeof s.jitter === 'number' ? s.jitter * 1000 : undefined, lossPercent: local ? senderLossPercent(remote, Number(s.packetsSent ?? 0), remoteLost) : packets + lost > 0 ? lost / (packets + lost) * 100 : undefined, mbps: previous && timestamp > previous.timestamp ? Math.max(0, (bytes - previous.bytes) * 8 / (timestamp - previous.timestamp) / 1000) : undefined, fps: typeof s.framesPerSecond === 'number' ? s.framesPerSecond : undefined, width: typeof s.frameWidth === 'number' ? s.frameWidth : undefined, height: typeof s.frameHeight === 'number' ? s.frameHeight : undefined, limitation: typeof s.qualityLimitationReason === 'string' ? s.qualityLimitationReason : undefined })
+        const codecStats = s.codecId ? report.get(String(s.codecId)) : undefined
+        const implementation = local ? s.encoderImplementation : s.decoderImplementation
+        const efficient = local ? s.powerEfficientEncoder : s.powerEfficientDecoder
+        const media = { codec: typeof codecStats?.mimeType === 'string' ? codecStats.mimeType : undefined, implementation: typeof implementation === 'string' ? implementation : undefined, hardware: typeof efficient === 'boolean' ? efficient : undefined }
+        let freezesPerMinute: number | undefined
+        if (!local && typeof s.freezeCount === 'number') {
+          const window = this.freezes.get(p.identity) ?? new FreezeWindow()
+          this.freezes.set(p.identity, window)
+          freezesPerMinute = window.add(timestamp, s.freezeCount)
+        }
+        output.push({ ...media, freezesPerMinute, identity: p.identity, name: p.name || p.identity, local, rttMs: rtt, jitterMs: typeof s.jitter === 'number' ? s.jitter * 1000 : undefined, lossPercent: local ? senderLossPercent(remote, Number(s.packetsSent ?? 0), remoteLost) : packets + lost > 0 ? lost / (packets + lost) * 100 : undefined, mbps: previous && timestamp > previous.timestamp ? Math.max(0, (bytes - previous.bytes) * 8 / (timestamp - previous.timestamp) / 1000) : undefined, fps: typeof s.framesPerSecond === 'number' ? s.framesPerSecond : undefined, width: typeof s.frameWidth === 'number' ? s.frameWidth : undefined, height: typeof s.frameHeight === 'number' ? s.frameHeight : undefined, limitation: typeof s.qualityLimitationReason === 'string' ? s.qualityLimitationReason : undefined })
       })
     }
     // Simulcast gera vários outbound-rtp: mostrar a maior camada e somar sua banda.
@@ -416,13 +451,25 @@ export class LiveKitRoomClient implements RoomClient {
     if (this.publishing && room === this.room && room.state === 'connected' && Date.now() - this.reportedAt >= 5000) {
       this.reportedAt = Date.now()
       const sending = aggregated.find((s) => s.local)
-      void room.localParticipant.setAttributes({ 'screen.report': JSON.stringify({ quality: capture?.quality, captureWidth: capture?.width, captureHeight: capture?.height, sendWidth: sending?.width, sendHeight: sending?.height, fps: sending?.fps, sourceWidth: capture?.sourceWidth, sourceHeight: capture?.sourceHeight, locked: capture?.captureLocked, app: APP_BUILD, rttMs: sending?.rttMs, appPingMs: this.appPingMs, lossPercent: sending?.lossPercent, mbps: sending?.mbps, limitation: sending?.limitation }) }).catch(() => undefined)
+      void room.localParticipant.setAttributes({ 'screen.report': JSON.stringify({ quality: capture?.quality, captureWidth: capture?.width, captureHeight: capture?.height, sendWidth: sending?.width, sendHeight: sending?.height, fps: sending?.fps, sourceWidth: capture?.sourceWidth, sourceHeight: capture?.sourceHeight, locked: capture?.captureLocked, app: APP_BUILD, rttMs: sending?.rttMs, appPingMs: this.appPingMs, lossPercent: sending?.lossPercent, mbps: sending?.mbps, limitation: sending?.limitation, codec: sending?.codec, encoder: sending?.implementation?.slice(0, 60), hw: sending?.hardware, reason: capture?.codec?.reason?.slice(0, 90) }) }).catch(() => undefined)
+    }
+    // quem assiste conta como está recebendo (fps e travadas): aparece no painel de administração
+    const receiving = aggregated.filter((s) => !s.local)
+    if (receiving.length && room === this.room && room.state === 'connected' && Date.now() - this.receiveReportedAt >= 10000) {
+      this.receiveReportedAt = Date.now()
+      const rx: Record<string, { f?: number; z?: number; l?: number }> = {}
+      for (const s of receiving.slice(0, 8)) rx[s.identity] = { f: s.fps === undefined ? undefined : Math.round(s.fps), z: s.freezesPerMinute, l: s.lossPercent === undefined ? undefined : Math.round(s.lossPercent * 10) / 10 }
+      void room.localParticipant.setAttributes({ 'screen.rx': JSON.stringify(rx) }).catch(() => undefined)
     }
     return aggregated
   }
 }
 
-export interface StreamDiagnostic { identity: string; name: string; local: boolean; rttMs?: number; jitterMs?: number; lossPercent?: number; mbps?: number; fps?: number; width?: number; height?: number; limitation?: string }
+export interface StreamDiagnostic { identity: string; name: string; local: boolean; rttMs?: number; jitterMs?: number; lossPercent?: number; mbps?: number; fps?: number; width?: number; height?: number; limitation?: string
+  /** Formato (ex.: video/VP9), quem codifica/decodifica (ex.: libvpx, NVIDIA H.264 Encoder MFT) e se é pela placa de vídeo. */
+  codec?: string; implementation?: string; hardware?: boolean
+  /** Quem assiste: quantas vezes a imagem congelou no último minuto. */
+  freezesPerMinute?: number }
 
 /**
  * RTT de rede até o SFU, em ms: o do par ICE em uso (pacotes STUN, medidos pelo próprio navegador).

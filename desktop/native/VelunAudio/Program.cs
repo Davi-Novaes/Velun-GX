@@ -9,11 +9,14 @@ using VelunAudio;
 //   VelunAudio.exe --exclude-name Discord,DiscordPTB,DiscordCanary   (padrão)
 //   VelunAudio.exe --exclude-pid 1234                               (testes)
 //   VelunAudio.exe --include-hwnd 5678                              (só o som do programa dessa janela)
+//   VelunAudio.exe --multi --exclude-tree-pid 4321                  (sem o Discord E sem a árvore 4321, ex.: o Velun Gx)
 //   VelunAudio.exe --probe                                           (só verifica se o Windows suporta)
 
 var excludeNames = new[] { "Discord", "DiscordPTB", "DiscordCanary" };
 uint? fixedPid = null;
 var mode = ProcessLoopbackMode.ExcludeTargetProcessTree;
+var multi = false;
+var excludedTrees = new List<uint>();
 for (var i = 0; i < args.Length; i++)
 {
     switch (args[i])
@@ -26,6 +29,8 @@ for (var i = 0; i < args.Length; i++)
             fixedPid = owner;
             mode = ProcessLoopbackMode.IncludeTargetProcessTree;
             break;
+        case "--multi": multi = true; break;
+        case "--exclude-tree-pid": excludedTrees.Add(uint.Parse(args[++i])); break;
         case "--probe": return Probe();
     }
 }
@@ -35,6 +40,34 @@ var stop = false;
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; stop = true; };
 // o app fecha o stdin para pedir o encerramento
 _ = Task.Run(() => { try { Console.OpenStandardInput().CopyTo(Stream.Null); } catch (IOException) { } stop = true; });
+
+void Write(ReadOnlySpan<byte> data)
+{
+    stdout.Write(data);
+    stdout.Flush();
+}
+
+if (multi && fixedPid is null)
+{
+    // Vários programas misturados: tira o Discord e também o Velun Gx (que toca o som das transmissões dos
+    // outros). Se o Windows não deixar listar as sessões de áudio, cai para o modo antigo (só sem o Discord).
+    try
+    {
+        using var capture = new MultiProcessCapture(excludeNames, excludedTrees, (evt, data) => Status(evt, data));
+        capture.Run(Write, () => stop);
+        Status("stopped");
+        return 0;
+    }
+    catch (IOException)
+    {
+        Status("stopped");
+        return 0;
+    }
+    catch (Exception ex) when (ex is COMException or InvalidCastException or EntryPointNotFoundException)
+    {
+        Status("fallback", ("message", ex.Message), ("hresult", ex.HResult));
+    }
+}
 
 while (!stop)
 {
@@ -48,11 +81,7 @@ while (!stop)
         else Status("started", ("excludedPid", excluding ? target : null), ("mode", excluding ? "exclude-tree" : "everything (Discord fechado)"));
         var lastCheck = Stopwatch.StartNew();
         var restart = false;
-        capture.Run(data =>
-        {
-            stdout.Write(data);
-            stdout.Flush();
-        }, () =>
+        capture.Run(Write, () =>
         {
             if (stop) return true;
             if (fixedPid is null && lastCheck.ElapsedMilliseconds > 2000)
@@ -82,9 +111,11 @@ return 0;
 static int Probe()
 {
     var build = Environment.OSVersion.Version.Build;
-    if (build < 20348)
+    // A documentação da Microsoft cita o build 20348 (Windows 11), mas a captura por processo funciona desde o
+    // Windows 10 2004 (build 19041) — o OBS libera a partir dele. Abaixo disso nem tenta; acima, o teste real decide.
+    if (build < 19041)
     {
-        Status("unsupported", ("build", build), ("message", "A captura por programa exige Windows 11."));
+        Status("unsupported", ("build", build), ("message", "A captura por programa exige Windows 10 versão 2004 ou mais nova."));
         return 2;
     }
     try

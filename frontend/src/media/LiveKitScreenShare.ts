@@ -1,6 +1,7 @@
-import { type LocalTrackPublication, type Room, Track, VideoPreset } from 'livekit-client'
+import { type LocalTrackPublication, type Room, Track, type TrackPublishOptions, VideoPreset } from 'livekit-client'
 import type { JoinResponse } from '../api/contracts'
-import { type DesktopAudio, startDesktopAudio, velunBridge } from '../desktop/velun'
+import { type DesktopAudio, type DesktopAudioMode, desktopProcessAudio, pcAudioAllowed, startDesktopAudio, velunBridge } from '../desktop/velun'
+import { type CodecDecision, chooseCodec, rememberH264Hardware, rememberVp9TooHeavy } from './codecChoice'
 import { type EncodingPlan, planEncoding } from './presets'
 import { type DisplaySurface, type LocalShare, type ShareOptions, ShareError, toShareError } from './RoomClient'
 
@@ -19,6 +20,13 @@ export class LiveKitScreenShare {
   private sourceSize = { width: 0, height: 0 }
   /** App Velun Gx: som do PC vindo do componente nativo (sem o Discord), no lugar do áudio do navegador. */
   private desktopAudio: DesktopAudio | null = null
+  /** Windows 10: som do PC inteiro vindo do próprio getDisplayMedia (o app entrega o "loopback" do sistema). */
+  private pcAudioMode: DesktopAudioMode | undefined
+  /** Formato de vídeo em uso e o que é preciso para republicar se ele mudar no meio da transmissão. */
+  private codec: CodecDecision | null = null
+  private publishContext: { plan: EncodingPlan; width: number; height: number; streamName: string; hardware: boolean } | null = null
+  private codecWatch: ReturnType<typeof setInterval> | undefined
+  private switchingCodec = false
 
   constructor(
     private readonly room: Room,
@@ -54,12 +62,13 @@ export class LiveKitScreenShare {
     })
     const wantAudio = options.audio && this.policy.audio.enabled
     const desktop = velunBridge()
+    const path = audioPath(wantAudio, desktop !== null)
 
     // getDisplayMedia precisa ser a primeira coisa assíncrona depois do clique (ativação do usuário)
     let stream: MediaStream
     try {
-      // no app o som não vem do navegador: vem do componente nativo, que tira a call do Discord
-      stream = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions(options, plan, wantAudio && !desktop))
+      // no app (Windows 10 2004+/11) o som não vem do navegador: vem do componente nativo, que tira a call do Discord
+      stream = await navigator.mediaDevices.getDisplayMedia(requestFor(options, plan, path))
     } catch (error) {
       throw toShareError(error)
     }
@@ -88,18 +97,12 @@ export class LiveKitScreenShare {
     const height = settings.height ?? 0
     const streamName = `screen-${this.room.localParticipant.identity}`
 
+    // H.264 pela placa de vídeo se a pessoa ativou; senão VP9/VP8 conforme o processador desta máquina
+    this.codec = chooseCodec(plan, { hardware: options.hardwareEncoding === true })
+    this.publishContext = { plan, width, height, streamName, hardware: options.hardwareEncoding === true }
     try {
       await this.authorize?.()
-      this.videoPublication = await this.room.localParticipant.publishTrack(videoTrack, {
-        source: Track.Source.ScreenShare,
-        name: `screen:${this.room.localParticipant.identity}`,
-        stream: streamName,
-        videoCodec: 'vp8',
-        simulcast: true,
-        screenShareEncoding: { maxBitrate: plan.maxBitrateKbps * 1000, maxFramerate: plan.fps, priority: 'high' },
-        screenShareSimulcastLayers: screenLayers(plan, width, height),
-        degradationPreference: plan.degradationPreference,
-      })
+      this.videoPublication = await this.room.localParticipant.publishTrack(videoTrack, this.videoPublishOptions(this.codec))
     } catch (error) {
       stopAll(stream)
       this.captured = null
@@ -108,10 +111,17 @@ export class LiveKitScreenShare {
     }
 
     let audioError: string | undefined
-    if (desktop && wantAudio) {
+    this.pcAudioMode = undefined
+    if (path === 'helper') {
       const opened = await this.openDesktopAudio(options)
       audioTrack = opened.track
-      audioError = opened.error
+      // clicou antes de terminar a verificação do Windows: é Windows 10, oferece o som do PC
+      audioError = opened.error && desktopProcessAudio() === false ? WINDOWS10_AUDIO : opened.error
+    } else if (path === 'pc-blocked') {
+      audioError = WINDOWS10_AUDIO
+    } else if (path === 'pc-loopback') {
+      if (audioTrack) this.pcAudioMode = 'system-loopback'
+      else audioError = 'Atualize o Velun Gx (versão 0.2.8 ou mais nova) para transmitir o som do PC no Windows 10.'
     }
 
     let hasAudio = false
@@ -148,14 +158,20 @@ export class LiveKitScreenShare {
       audioScope: options.audioScope,
       hasAudio,
       audioEnabled: hasAudio,
-      desktopAudio: hasAudio ? this.desktopAudio?.mode : undefined,
+      desktopAudio: hasAudio ? this.desktopAudio?.mode ?? this.pcAudioMode : undefined,
       audioError,
+      codec: this.codec,
     }
+    this.watchCodec()
     this.onChange(this.current)
     return this.current
   }
 
   async stop(): Promise<void> {
+    clearInterval(this.codecWatch)
+    this.codecWatch = undefined
+    this.codec = null
+    this.publishContext = null
     const video = this.videoPublication
     const audio = this.audioPublication
     const stream = this.captured
@@ -179,6 +195,7 @@ export class LiveKitScreenShare {
     const track = this.videoPublication?.videoTrack
     if (!track || !this.current) throw new ShareError('not_connected', 'Inicie uma transmissão primeiro.')
     const plan = planEncoding(options, this.policy.video)
+    if (this.publishContext) this.publishContext = { ...this.publishContext, plan }
     const target = captureTarget(this.sourceSize, options, plan, this.policy.video)
     const previousConstraints = track.mediaStreamTrack.getConstraints()
     const previousQuality = this.current.quality
@@ -220,7 +237,8 @@ export class LiveKitScreenShare {
     let stream: MediaStream
     const desktop = velunBridge()
     const wantAudio = options.audio && this.policy.audio.enabled
-    try { stream = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions(options, planEncoding(options, this.policy.video), wantAudio && !desktop)) }
+    const path = audioPath(wantAudio, desktop !== null)
+    try { stream = await navigator.mediaDevices.getDisplayMedia(requestFor(options, planEncoding(options, this.policy.video), path)) }
     catch (error) { throw toShareError(error) }
     const next = stream.getVideoTracks()[0]
     if (!next) { stopAll(stream); throw new ShareError('failed', 'A fonte não forneceu vídeo.') }
@@ -240,11 +258,17 @@ export class LiveKitScreenShare {
     this.closeDesktopAudio()
     let audio = stream.getAudioTracks()[0]
     let audioError: string | undefined
-    if (desktop && wantAudio) {
+    this.pcAudioMode = undefined
+    if (path === 'helper') {
       // a nova fonte pode mudar o modo (janela = só aquele programa; tela = PC sem o Discord)
       const opened = await this.openDesktopAudio(options)
       audio = opened.track ?? undefined
-      audioError = opened.error
+      audioError = opened.error && desktopProcessAudio() === false ? WINDOWS10_AUDIO : opened.error
+    } else if (path === 'pc-blocked') {
+      audioError = WINDOWS10_AUDIO
+    } else if (path === 'pc-loopback') {
+      if (audio) this.pcAudioMode = 'system-loopback'
+      else audioError = 'Atualize o Velun Gx (versão 0.2.8 ou mais nova) para transmitir o som do PC no Windows 10.'
     }
     let hasAudio = false
     if (audio) {
@@ -262,7 +286,7 @@ export class LiveKitScreenShare {
       ...this.current,
       surface: desktop ? await desktopSurface(nextSurface) : toSurface(nextSurface),
       audioRequested: options.audio, audioScope: options.audioScope, hasAudio, audioEnabled: hasAudio,
-      desktopAudio: hasAudio ? this.desktopAudio?.mode : undefined, audioError,
+      desktopAudio: hasAudio ? this.desktopAudio?.mode ?? this.pcAudioMode : undefined, audioError,
     }
     return this.updateQuality(options)
   }
@@ -292,6 +316,94 @@ export class LiveKitScreenShare {
   private closeDesktopAudio(): void {
     this.desktopAudio?.stop()
     this.desktopAudio = null
+  }
+
+  private videoPublishOptions(decision: CodecDecision): TrackPublishOptions {
+    const { plan, width, height, streamName } = this.publishContext!
+    // H.264 pela placa no mesmo limite dos outros formatos: mais bits (já foi 1,25×) só aumentava os pacotes
+    // a perder e o tamanho dos quadros-chave, e cada espectador recebe essa camada única inteira
+    const maxBitrateKbps = plan.maxBitrateKbps
+    const common: TrackPublishOptions = {
+      source: Track.Source.ScreenShare,
+      name: `screen:${this.room.localParticipant.identity}`,
+      stream: streamName,
+      screenShareEncoding: { maxBitrate: maxBitrateKbps * 1000, maxFramerate: plan.fps, priority: 'high' },
+      degradationPreference: plan.degradationPreference,
+    }
+    // VP9 numa resolução só (L1T3): com camadas de tamanhos diferentes (L3T3) o Chromium segurava a camada 1080p
+    // até a banda estimada subir, e quem assistia ficava em 540p. A adaptação à rede passa a ser só por quadros/s.
+    // O servidor mantém uma cópia VP8 para quem não decodificar VP9.
+    if (decision.codec === 'vp9') return { ...common, videoCodec: 'vp9', scalabilityMode: 'L1T3', backupCodec: { codec: 'vp8' } }
+    // H.264 pela placa: uma camada só — com várias camadas (simulcast) o Chromium volta a codificar no processador
+    if (decision.codec === 'h264') return { ...common, videoCodec: 'h264', simulcast: false }
+    return { ...common, videoCodec: decision.codec, simulcast: true, screenShareSimulcastLayers: screenLayers(plan, width, height) }
+  }
+
+  /**
+   * Confere o formato durante a transmissão: H.264 sem placa de vídeo de verdade (o navegador caiu para o
+   * codificador do processador) troca para VP9/VP8; VP9 com o processador no limite por ~10 s troca para VP8.
+   */
+  private watchCodec(): void {
+    clearInterval(this.codecWatch)
+    let cpuStrikes = 0
+    let hardwareChecked = false
+    this.codecWatch = setInterval(() => {
+      void (async () => {
+        const sender = this.videoPublication?.videoTrack?.sender
+        if (!sender || !this.codec || this.switchingCodec) return
+        const report = await sender.getStats().catch(() => null)
+        let top: Record<string, unknown> | undefined
+        report?.forEach((s: Record<string, unknown>) => {
+          if (s.type === 'outbound-rtp' && s.kind === 'video' && Number(s.frameWidth ?? 0) >= Number(top?.frameWidth ?? -1)) top = s
+        })
+        if (!top) return
+        if (this.codec.codec === 'h264' && !hardwareChecked && Number(top.framesEncoded ?? 0) > 30) {
+          hardwareChecked = true
+          // alguns navegadores não informam quem codifica: sem a informação, mantém o H.264 (não conclui "sem placa")
+          if (typeof top.powerEfficientEncoder !== 'boolean') return
+          const onCard = top.powerEfficientEncoder
+          rememberH264Hardware(onCard)
+          if (!onCard) {
+            const fallback = chooseCodec(this.publishContext!.plan, { hardware: true })
+            // diagnóstico: qual codificador o navegador usou no H.264 (fica guardado neste navegador)
+            try { localStorage.setItem('tj:lastH264Encoder', String(top.encoderImplementation ?? 'não informado')) } catch { /* sem armazenamento */ }
+            await this.switchCodec(fallback)
+          }
+          return
+        }
+        if (this.codec.codec === 'vp9') {
+          cpuStrikes = top.qualityLimitationReason === 'cpu' ? cpuStrikes + 1 : 0
+          if (cpuStrikes >= 5) {
+            rememberVp9TooHeavy()
+            await this.switchCodec({ codec: 'vp8', reason: 'Processador no limite durante a transmissão: trocado de VP9 para VP8' })
+          }
+        }
+      })()
+    }, 2000)
+  }
+
+  /** Republica o MESMO vídeo capturado em outro formato (quem assiste vê uma pausa de ~1 s). */
+  private async switchCodec(next: CodecDecision): Promise<void> {
+    const publication = this.videoPublication
+    if (!publication?.track || !this.publishContext || this.switchingCodec || next.codec === this.codec?.codec) return
+    this.switchingCodec = true
+    const media = publication.track.mediaStreamTrack
+    try {
+      await this.room.localParticipant.unpublishTrack(publication.track, false)
+      if (this.videoPublication !== publication || media.readyState === 'ended') return // parou no meio
+      this.videoPublication = await this.room.localParticipant.publishTrack(media, this.videoPublishOptions(next))
+      this.codec = next
+      if (this.current) { this.current = { ...this.current, codec: next }; this.onChange(this.current) }
+      this.watchCodec()
+    } catch {
+      // não conseguiu no formato novo: volta para o leve, que todo navegador codifica
+      if (media.readyState !== 'ended' && this.publishContext) {
+        this.videoPublication = await this.room.localParticipant.publishTrack(media, this.videoPublishOptions({ codec: 'vp8', reason: 'Formato anterior falhou' })).catch(() => null)
+        this.codec = { codec: 'vp8', reason: 'Formato anterior falhou' }
+      }
+    } finally {
+      this.switchingCodec = false
+    }
   }
 
   /** Prévia local: o próprio stream capturado, sem passar pelo SFU. */
@@ -340,8 +452,9 @@ export function displayMediaOptions(options: ShareOptions, plan: EncodingPlan, a
         } as MediaTrackConstraints)
       : false,
     // opções do Chromium (ignoradas por quem não suporta)
-    // Som do computador inteiro só se o usuário pediu: ele inclui Discord, chamadas e notificações.
-    systemAudio: systemWide ? 'include' : 'exclude',
+    // Oferece áudio também para tela inteira; janela continua pedindo apenas o som daquele aplicativo.
+    // No desktop, a captura real continua vindo do helper nativo, não desta opção do navegador.
+    systemAudio: audio && (systemWide || options.surface === 'monitor') ? 'include' : 'exclude',
     // Janela: só o som daquele app (Chrome 141+ onde o sistema permite), nunca o do computador todo por padrão.
     windowAudio: !audio ? 'exclude' : systemWide ? 'system' : 'window',
     selfBrowserSurface: 'exclude', // não deixa compartilhar a própria aba da sala (eco/espelho infinito)
@@ -370,6 +483,27 @@ function screenLayers(plan: EncodingPlan, width: number, height: number): VideoP
 
 function toSurface(value: string | undefined): DisplaySurface | 'unknown' {
   return value === 'monitor' || value === 'window' || value === 'browser' ? value : 'unknown'
+}
+
+/** Mensagem do Windows 10 quando a pessoa ainda não aceitou transmitir o som do PC inteiro. */
+export const WINDOWS10_AUDIO = 'Este Windows não permite tirar a call do Discord do som (precisa do Windows 10 versão 2004 ou mais novo). Para transmitir com áudio, ative "Som do PC (inclui a call do Discord)".'
+
+/**
+ * De onde vem o som desta captura. Decidido no clique, sem esperar nada (getDisplayMedia precisa da ativação):
+ * browser = o navegador entrega; helper = componente nativo do app (Windows 10 2004+/11, sem Discord e sem o app);
+ * pc-loopback = app no Windows 10 com o som do PC inteiro aceito; pc-blocked = Windows 10 sem aceitar.
+ */
+export type AudioPath = 'none' | 'browser' | 'helper' | 'pc-loopback' | 'pc-blocked'
+export function audioPath(wantAudio: boolean, desktop: boolean, processAudio = desktopProcessAudio(), allowPc = pcAudioAllowed()): AudioPath {
+  if (!wantAudio) return 'none'
+  if (!desktop) return 'browser'
+  if (processAudio === false) return allowPc ? 'pc-loopback' : 'pc-blocked'
+  return 'helper'
+}
+
+function requestFor(options: ShareOptions, plan: EncodingPlan, path: AudioPath): DisplayMediaStreamOptions {
+  if (path === 'pc-loopback') return displayMediaOptions({ ...options, audioScope: 'system' }, plan, true)
+  return displayMediaOptions(options, plan, path === 'browser')
 }
 
 /** No app a captura vem do seletor próprio, que sabe se foi tela ou janela (o Chromium nem sempre informa). */

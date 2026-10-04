@@ -19,6 +19,15 @@ public sealed class UserAccount
     public string ShownName => Nickname ?? Username;
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset? LastLoginAt { get; private set; }
+    /// <summary>Última vez com o site ou o app aberto (atualizada no máximo a cada poucos minutos).</summary>
+    public DateTimeOffset? LastSeenAt { get; private set; }
+    /// <summary>Banida pelo administrador: não entra mais e perde os logins abertos.</summary>
+    public DateTimeOffset? BannedAt { get; private set; }
+    public string? BanReason { get; private set; }
+    public bool IsBanned => BannedAt is not null;
+    public const int BanReasonMaxLength = 200;
+    /// <summary>Senha definida pelo administrador: a pessoa precisa criar a própria senha ao entrar.</summary>
+    public bool MustChangePassword { get; private set; }
 
     private UserAccount() { }
 
@@ -38,7 +47,7 @@ public sealed class UserAccount
         };
     }
 
-    public void RecordLogin(DateTimeOffset now) => LastLoginAt = now;
+    public void RecordLogin(DateTimeOffset now) => LastSeenAt = LastLoginAt = now;
 
     /// <summary>Vazio remove o apelido (volta a aparecer o nome de usuário).</summary>
     public void SetNickname(string? nickname)
@@ -47,6 +56,29 @@ public sealed class UserAccount
         if (!DisplayName.TryCreate(nickname, out var name))
             throw new ArgumentException($"O apelido deve ter de 1 a {DisplayName.MaxLength} caracteres visíveis.", nameof(nickname));
         Nickname = name.Value;
+    }
+
+    /// <summary>Bane e troca o carimbo de segurança: todo login aberto (site e app) deixa de valer na hora.</summary>
+    public void Ban(DateTimeOffset now, string? reason)
+    {
+        var text = reason?.Trim();
+        if (text is { Length: > BanReasonMaxLength }) throw new ArgumentException($"O motivo deve ter até {BanReasonMaxLength} caracteres.", nameof(reason));
+        BannedAt = now;
+        BanReason = string.IsNullOrEmpty(text) ? null : text;
+        SecurityStamp = Guid.NewGuid().ToString("N");
+    }
+
+    public void Unban()
+    {
+        BannedAt = null;
+        BanReason = null;
+    }
+
+    /// <summary>Troca a senha (pela própria pessoa ou pelo administrador): todo login aberto deixa de valer.</summary>
+    public void ChangePassword(string passwordHash, bool mustChangeOnNextLogin)
+    {
+        ReplacePasswordHash(passwordHash);
+        MustChangePassword = mustChangeOnNextLogin;
     }
 
     public void ReplacePasswordHash(string passwordHash)

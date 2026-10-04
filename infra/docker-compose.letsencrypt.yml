@@ -1,0 +1,27 @@
+# Servidor Ubuntu com Let's Encrypt. Uso (depois de docker-compose.prod.yml):
+#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml -f infra/docker-compose.letsencrypt.yml up -d --build
+services:
+  traefik:
+    ports:
+      # o roteador encaminha 8443 de fora para a 8443 do servidor; o app e os links usam :8443
+      - "8443:443"
+    volumes:
+      - ./traefik/traefik.letsencrypt.yml:/etc/traefik/traefik.yml:ro
+      - letsencrypt:/letsencrypt
+
+  # as rotas usam PathPrefix (sem Host): o certificado precisa ser indicado nelas, com o domínio
+  frontend:
+    labels:
+      traefik.http.routers.web.tls.certresolver: le
+      traefik.http.routers.web.tls.domains[0].main: discordmeet.ddns.net
+  backend:
+    labels:
+      traefik.http.routers.api.tls.certresolver: le
+      traefik.http.routers.api.tls.domains[0].main: discordmeet.ddns.net
+  livekit:
+    labels:
+      traefik.http.routers.sfu.tls.certresolver: le
+      traefik.http.routers.sfu.tls.domains[0].main: discordmeet.ddns.net
+
+volumes:
+  letsencrypt:

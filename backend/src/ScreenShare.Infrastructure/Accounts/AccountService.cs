@@ -40,10 +40,46 @@ public sealed class AccountService(AppDbContext db, IPasswordHasher<UserAccount>
         var user = await db.Users.SingleOrDefaultAsync(x => x.NormalizedUsername == name, ct);
         var result = hasher.VerifyHashedPassword(user!, user?.PasswordHash ?? DummyHash.Value, password);
         if (user is null || result == PasswordVerificationResult.Failed) return null;
+        if (user.IsBanned) return user; // senha certa, mas banida: quem chama recusa com a mensagem de banimento
         if (result == PasswordVerificationResult.SuccessRehashNeeded) user.ReplacePasswordHash(hasher.HashPassword(user, password));
         user.RecordLogin(clock.GetUtcNow());
         await db.SaveChangesAsync(ct);
         return user;
+    }
+
+    /// <summary>
+    /// A própria pessoa troca a senha: confere a atual, valida a nova e encerra os outros logins (troca o carimbo).
+    /// Retorna null se a senha atual estiver errada.
+    /// </summary>
+    public async Task<UserAccount?> ChangeOwnPasswordAsync(Guid userId, string currentPassword, string newPassword, string confirmPassword, CancellationToken ct)
+    {
+        var user = await db.Users.SingleAsync(u => u.Id == userId, ct);
+        if (string.IsNullOrEmpty(currentPassword) || currentPassword.Length > 128 || hasher.VerifyHashedPassword(user, user.PasswordHash, currentPassword) == PasswordVerificationResult.Failed) return null;
+        ValidatePassword(newPassword);
+        if (!string.Equals(newPassword, confirmPassword, StringComparison.Ordinal)) throw new ArgumentException("As senhas não coincidem.");
+        if (string.Equals(newPassword, currentPassword, StringComparison.Ordinal)) throw new ArgumentException("A senha nova precisa ser diferente da atual.");
+        user.ChangePassword(hasher.HashPassword(user, newPassword), mustChangeOnNextLogin: false);
+        await RevokeSessionsAsync(user.Id, ct);
+        await db.SaveChangesAsync(ct);
+        return user;
+    }
+
+    /// <summary>O administrador define a senha de alguém (esqueceu a senha etc.). Encerra os logins abertos da pessoa.</summary>
+    public async Task<UserAccount?> SetPasswordByAdminAsync(Guid userId, string newPassword, bool mustChangeOnNextLogin, CancellationToken ct)
+    {
+        var user = await db.Users.SingleOrDefaultAsync(u => u.Id == userId, ct);
+        if (user is null) return null;
+        ValidatePassword(newPassword);
+        user.ChangePassword(hasher.HashPassword(user, newPassword), mustChangeOnNextLogin);
+        await RevokeSessionsAsync(user.Id, ct);
+        await db.SaveChangesAsync(ct);
+        return user;
+    }
+
+    private Task<int> RevokeSessionsAsync(Guid userId, CancellationToken ct)
+    {
+        var now = clock.GetUtcNow();
+        return db.AccountSessions.Where(s => s.UserId == userId && s.RevokedAt == null).ExecuteUpdateAsync(s => s.SetProperty(x => x.RevokedAt, now), ct);
     }
 
     private static void ValidatePassword(string password)

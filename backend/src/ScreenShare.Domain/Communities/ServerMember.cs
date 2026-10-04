@@ -8,6 +8,8 @@ public sealed class ServerMember
     public Guid UserId { get; private set; }
     public string Role { get; private set; } = MemberRole;
     public DateTimeOffset JoinedAt { get; private set; }
+    public Guid? ServerRoleId { get; private set; }
+    public void AssignRole(Guid? id) => ServerRoleId = id;
 
     private ServerMember() { }
 

@@ -10,11 +10,17 @@ type Options = Record<string, unknown> & { audio: false | Record<string, unknown
 const build = (options: ShareOptions, audio = options.audio) => displayMediaOptions(options, plan, audio) as unknown as Options
 
 describe('opções do getDisplayMedia', () => {
-  it('"só do que é compartilhado": nunca oferece o som do computador todo', () => {
+  it('tela inteira oferece áudio do sistema por padrão, sem processar como voz', () => {
     const o = build(base)
-    expect(o.systemAudio).toBe('exclude')
+    expect(o.systemAudio).toBe('include')
     expect(o.windowAudio).toBe('window')
     expect(o.audio).toMatchObject({ restrictOwnAudio: true, echoCancellation: false, noiseSuppression: false, autoGainControl: false })
+  })
+
+  it('janela solicita somente áudio daquele aplicativo', () => {
+    const o = build({ ...base, surface: 'window' })
+    expect(o.systemAudio).toBe('exclude')
+    expect(o.windowAudio).toBe('window')
   })
 
   it('"todo o som do computador": inclui o áudio do sistema também para janelas', () => {

@@ -8,6 +8,8 @@ export interface AccountProfile {
   avatar: string | null
   createdAt: string
   lastLoginAt: string | null
+  /** Senha definida pelo administrador: precisa criar a própria antes de continuar. */
+  mustChangePassword?: boolean
 }
 
 export class AccountApiError extends Error {
@@ -44,4 +46,5 @@ export const accounts = {
   login: (username: string, password: string) => call<AccountProfile>('login', { username, password }),
   logout: () => call<void>('logout', {}),
   updateProfile: (changes: { nickname: string | null }) => call<AccountProfile>('me', changes, 'PATCH'),
+  changePassword: (currentPassword: string, newPassword: string, confirmPassword: string) => call<AccountProfile>('password', { currentPassword, newPassword, confirmPassword }),
 }

@@ -70,6 +70,8 @@ export interface ShareOptions extends QualityChoice {
    * system: todo o som do computador (o sistema operacional mistura tudo; não há como excluir um programa).
    */
   audioScope: AudioScope
+  /** H.264 pela placa de vídeo (NVENC/AMF/QuickSync). Desligado: VP9/VP8 escolhido pelo processador. */
+  hardwareEncoding?: boolean
 }
 
 export type AudioScope = 'shared' | 'system'
@@ -91,9 +93,11 @@ export interface LocalShare {
   /** A resolução de captura está travada (mín. = máx.)? Sem trava o Chrome pode reduzir a captura sozinho. */
   captureLocked?: boolean
   /** App Velun Gx: de onde vem o som (PC sem o Discord, ou só o programa da janela). */
-  desktopAudio?: 'exclude-discord' | 'window-app'
+  desktopAudio?: import('../desktop/velun').DesktopAudioMode
   /** Por que o som pedido não foi transmitido (app desktop). */
   audioError?: string
+  /** Formato de vídeo em uso e o motivo da escolha. */
+  codec?: import('./codecChoice').CodecDecision | null
 }
 
 /** Um compartilhamento na sala (de outra pessoa ou o próprio). Um por participante. */

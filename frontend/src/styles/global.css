@@ -18,7 +18,8 @@
   --radius: 12px;
   --radius-sm: 8px;
   --shadow: 0 12px 40px rgb(0 0 0 / 35%);
-  --font: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  /* mesma pilha do Discord: gg sans (se instalada) → Noto Sans (incluída no site) */
+  --font: 'gg sans', 'Noto Sans Variable', 'Noto Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif;
   --mono: ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, Consolas, monospace;
   color-scheme: dark;
 }
@@ -894,7 +895,7 @@ p {
   margin-top: 3px;
 }
 
-/* Identidade Telajunto: espaço, contraste e uma tela central sem distrações. */
+/* Identidade Velun Gx: espaço, contraste e uma tela central sem distrações. */
 :root { --bg: #0b1012; --bg-elev: #121a1d; --bg-elev-2: #1b2529; --border: #2a373b; --text: #f1f6f4; --text-muted: #9eafae; --accent: #a8edcc; --accent-strong: #88dcb4; --accent-text: #10271d; --radius: 20px; --radius-sm: 12px; color-scheme: dark; }
 body { background: radial-gradient(ellipse at 85% 10%, #1b302b 0, transparent 45%), var(--bg); }
 .btn { transition: background 160ms, transform 160ms, box-shadow 160ms; }
@@ -1008,3 +1009,18 @@ body { background: radial-gradient(ellipse at 85% 10%, #1b302b 0, transparent 45
 .update-progress { flex: 0 0 120px; height: 6px; border-radius: 3px; background: #343a4d; overflow: hidden; }
 .update-progress > span { display: block; height: 100%; background: #8b7cf8; transition: width .4s; }
 .app-version { display: block; margin-top: 2px; font-size: 10px; font-weight: 400; letter-spacing: 0; color: #6f788b; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.update-banner.failed { background: #3a1f27; border-color: #8d3b4d; }
+
+/* Sons da call */
+.sound-settings { border: 0; padding: 0; margin: 16px 0 4px; display: grid; gap: 8px; text-align: left; }
+.sound-volume { display: flex; align-items: center; gap: 10px; }
+.sound-volume input[type="range"] { flex: 1; }
+
+/* Windows 10: opção de transmitir o som do PC inteiro */
+.pc-audio-option { display: flex; gap: 10px; align-items: flex-start; margin: 12px 0 4px; padding: 10px 12px; border: 1px solid #4a3f2a; border-radius: 10px; background: #2a2418; text-align: left; }
+.pc-audio-option small { display: block; margin-top: 4px; line-height: 1.45; }
+.workspace-notice .btn { margin-left: auto; flex: none; }
+
+/* Aceleração de hardware (H.264 pela placa de vídeo) */
+.hw-encoding-option { display: flex; gap: 10px; align-items: flex-start; margin: 12px 0 4px; padding: 10px 12px; border: 1px solid #343a4d; border-radius: 10px; background: #1d2029; text-align: left; }
+.hw-encoding-option small { display: block; margin-top: 4px; line-height: 1.45; }

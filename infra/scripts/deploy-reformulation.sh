@@ -14,6 +14,9 @@ compose=(docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod
 cp infra/docker-compose.yml "$backup/docker-compose.yml"
 cp infra/docker-compose.prod.yml "$backup/docker-compose.prod.yml"
 tar --exclude=node_modules --exclude=bin --exclude=obj --exclude=dist --exclude=playwright-report --exclude=test-results -czf "$backup/source-before.tar.gz" backend frontend docs README.md
+if test -d desktop; then
+  tar --exclude=node_modules --exclude=bin --exclude=obj --exclude=release --exclude=dist-native -czf "$backup/desktop-source-before.tar.gz" desktop
+fi
 old_backend=$(docker inspect screenshare-backend-1 --format '{{.Image}}')
 old_frontend=$(docker inspect screenshare-frontend-1 --format '{{.Image}}')
 docker tag "$old_backend" "screenshare-backend:rollback-$stamp"

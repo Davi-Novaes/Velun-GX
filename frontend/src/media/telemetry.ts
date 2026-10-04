@@ -18,6 +18,11 @@ export interface StreamReport {
   lossPercent?: number
   mbps?: number
   limitation?: string
+  /** Formato do vídeo, codificador, se é pela placa de vídeo e por que esse formato foi escolhido. */
+  codec?: string
+  encoder?: string
+  hw?: boolean
+  reason?: string
 }
 export function readReport(value?: string): StreamReport | undefined {
   if (!value || value.length > 1500) return undefined
@@ -35,6 +40,10 @@ export function readReport(value?: string): StreamReport | undefined {
       app: typeof v.app === 'string' && v.app.length <= 40 ? v.app : undefined,
       rttMs: number('rttMs', 60000), appPingMs: number('appPingMs', 60000), lossPercent: number('lossPercent', 100), mbps: number('mbps', 1000),
       limitation: ['none', 'cpu', 'bandwidth', 'other'].includes(String(v.limitation)) ? String(v.limitation) : undefined,
+      codec: typeof v.codec === 'string' && /^video\/[A-Za-z0-9]{2,8}$/.test(v.codec) ? v.codec : undefined,
+      encoder: typeof v.encoder === 'string' && v.encoder.length <= 60 ? v.encoder : undefined,
+      hw: typeof v.hw === 'boolean' ? v.hw : undefined,
+      reason: typeof v.reason === 'string' && v.reason.length <= 90 ? v.reason : undefined,
     }
   } catch { return undefined }
 }

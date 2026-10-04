@@ -20,12 +20,12 @@ public sealed class CommunityException(int status, string message) : Exception(m
 
 public sealed record ServerView(Guid Id, string Name, string? Icon, Guid OwnerUserId, string Role, int MemberCount);
 public sealed record ChannelView(Guid Id, string Name, int Position);
-public sealed record MemberView(Guid Id, string Username, string Name, string Role);
+public sealed record MemberView(Guid Id, string Username, string Name, string Role, Guid? ServerRoleId = null);
 public sealed record PresenceView(Guid UserId, string Identity, string Name, bool IsSharing);
 public sealed record ChannelPresence(Guid Id, string Name, IReadOnlyList<PresenceView> Participants);
 
 /// <summary>Recursos permanentes e autorização de mídia. Nenhuma permissão vem do cliente.</summary>
-public sealed class CommunityService(AppDbContext db, IDistributedLock locks, ISfuGateway sfu, RoomService rooms, TimeProvider clock)
+public sealed partial class CommunityService(AppDbContext db, IDistributedLock locks, ISfuGateway sfu, RoomService rooms, TimeProvider clock)
 {
     private static CommunityException Denied() => new(403, "Você não possui acesso a este servidor.");
     private static CommunityException Missing() => new(404, "Servidor ou canal não encontrado.");
@@ -64,25 +64,28 @@ public sealed class CommunityService(AppDbContext db, IDistributedLock locks, IS
     {
         var server = await AccessAsync(userId, serverId, false, ct);
         var channels = await db.Channels.Where(c => c.ServerId == serverId && c.DeletedAt == null).OrderBy(c => c.Position).ThenBy(c => c.CreatedAt).Select(c => new ChannelView(c.Id, c.Name, c.Position)).ToListAsync(ct);
-        var members = await db.ServerMembers.Where(m => m.ServerId == serverId).Join(db.Users, m => m.UserId, u => u.Id, (m, u) => new { u.Id, u.Username, Name = u.Nickname ?? u.Username, m.Role }).OrderBy(m => m.Name).Select(m => new MemberView(m.Id, m.Username, m.Name, m.Role)).ToListAsync(ct);
-        return new { server.Id, server.Name, server.Icon, server.OwnerUserId, Channels = channels, Members = members };
+        var members = await db.ServerMembers.Where(m => m.ServerId == serverId).Join(db.Users, m => m.UserId, u => u.Id, (m, u) => new { u.Id, u.Username, Name = u.Nickname ?? u.Username, m.Role, m.ServerRoleId }).OrderBy(m => m.Name).Select(m => new MemberView(m.Id, m.Username, m.Name, m.Role, m.ServerRoleId)).ToListAsync(ct);
+        var roles = await db.ServerRoles.Where(r => r.ServerId == serverId).OrderByDescending(r => r.Position).ToListAsync(ct);
+        return new { server.Id, server.Name, server.Icon, server.OwnerUserId, Channels = channels, Members = members, Roles = roles };
     }
 
     public async Task RenameAsync(Guid userId, Guid serverId, string name, CancellationToken ct)
     {
-        (await AccessAsync(userId, serverId, true, ct)).Rename(name);
+        await RequirePermissionAsync(userId, serverId, ServerAccess.ManageServer, ct);
+        (await AccessAsync(userId, serverId, false, ct)).Rename(name);
         await db.SaveChangesAsync(ct);
     }
     public async Task SetIconAsync(Guid userId, Guid serverId, string? icon, CancellationToken ct)
     {
-        (await AccessAsync(userId, serverId, true, ct)).SetIcon(icon);
+        await RequirePermissionAsync(userId, serverId, ServerAccess.ManageServer, ct);
+        (await AccessAsync(userId, serverId, false, ct)).SetIcon(icon);
         await db.SaveChangesAsync(ct);
     }
 
     public async Task<ChannelView> CreateChannelAsync(Guid userId, Guid serverId, string name, CancellationToken ct)
     {
         await using var gate = await LockAsync($"community:server:{serverId:N}", ct);
-        await AccessAsync(userId, serverId, true, ct);
+        await RequirePermissionAsync(userId, serverId, ServerAccess.ManageChannels, ct);
         var count = await db.Channels.CountAsync(c => c.ServerId == serverId && c.DeletedAt == null, ct);
         if (count >= 30) throw new CommunityException(409, "Limite de 30 canais por servidor.");
         var position = (await db.Channels.Where(c => c.ServerId == serverId).MaxAsync(c => (int?)c.Position, ct) ?? -1) + 1;
@@ -100,14 +103,16 @@ public sealed class CommunityService(AppDbContext db, IDistributedLock locks, IS
 
     public async Task RenameChannelAsync(Guid userId, Guid channelId, string name, CancellationToken ct)
     {
-        (await ChannelAsync(userId, channelId, true, ct)).Rename(name);
+        var channel = await ChannelAsync(userId, channelId, false, ct);
+        await RequirePermissionAsync(userId, channel.ServerId, ServerAccess.ManageChannels, ct);
+        channel.Rename(name);
         await db.SaveChangesAsync(ct);
     }
 
     public async Task ReorderAsync(Guid userId, Guid serverId, Guid[] ids, CancellationToken ct)
     {
         await using var gate = await LockAsync($"community:server:{serverId:N}", ct);
-        await AccessAsync(userId, serverId, true, ct);
+        await RequirePermissionAsync(userId, serverId, ServerAccess.ManageChannels, ct);
         var channels = await db.Channels.Where(c => c.ServerId == serverId && c.DeletedAt == null).ToListAsync(ct);
         if (ids.Length != channels.Count || ids.Distinct().Count() != ids.Length || channels.Any(c => !ids.Contains(c.Id))) throw new CommunityException(400, "Informe todos os canais exatamente uma vez.");
         foreach (var channel in channels) channel.Reorder(Array.IndexOf(ids, channel.Id));
@@ -116,7 +121,7 @@ public sealed class CommunityService(AppDbContext db, IDistributedLock locks, IS
 
     public async Task<object> InviteAsync(Guid userId, Guid serverId, int? maxUses, CancellationToken ct)
     {
-        await AccessAsync(userId, serverId, true, ct);
+        await RequirePermissionAsync(userId, serverId, ServerAccess.Invite, ct);
         var code = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
         // convite sem prazo: vale até ser revogado pelo dono ou esgotar o limite de usos (se houver)
         var invite = ServerInvite.Create(serverId, userId, Hash(code), clock.GetUtcNow(), expiresAt: null, maxUses);
@@ -161,14 +166,16 @@ public sealed class CommunityService(AppDbContext db, IDistributedLock locks, IS
 
     public async Task RevokeInviteAsync(Guid userId, Guid serverId, Guid inviteId, CancellationToken ct)
     {
-        await AccessAsync(userId, serverId, true, ct);
+        await RequirePermissionAsync(userId, serverId, ServerAccess.Invite, ct);
         var invite = await db.ServerInvites.SingleOrDefaultAsync(i => i.Id == inviteId && i.ServerId == serverId, ct) ?? throw Missing();
         invite.Revoke(clock.GetUtcNow()); await db.SaveChangesAsync(ct);
     }
 
     public async Task RemoveMemberAsync(Guid actorId, Guid serverId, Guid targetId, CancellationToken ct)
     {
-        var server = await AccessAsync(actorId, serverId, actorId != targetId, ct);
+        await using var serverGate = await LockAsync($"community:server:{serverId:N}", ct);
+        var server = await AccessAsync(actorId, serverId, false, ct);
+        if (actorId != targetId) await ModerateAsync(actorId, serverId, targetId, ServerAccess.KickMembers, ct);
         if (server.OwnerUserId == targetId) throw new CommunityException(409, "O proprietário deve excluir o servidor antes de sair.");
         await using var userGate = await LockAsync($"community:user:{targetId:N}", ct);
         var member = await db.ServerMembers.SingleOrDefaultAsync(m => m.ServerId == serverId && m.UserId == targetId, ct);
@@ -186,7 +193,8 @@ public sealed class CommunityService(AppDbContext db, IDistributedLock locks, IS
 
     public async Task DeleteChannelAsync(Guid userId, Guid channelId, CancellationToken ct)
     {
-        var channel = await ChannelAsync(userId, channelId, true, ct);
+        var channel = await ChannelAsync(userId, channelId, false, ct);
+        await RequirePermissionAsync(userId, channel.ServerId, ServerAccess.ManageChannels, ct);
         channel.Delete(clock.GetUtcNow()); await db.SaveChangesAsync(ct);
         if (channel.MediaRoomId is { } roomId) await EmptyRoomAsync(roomId, ct);
     }

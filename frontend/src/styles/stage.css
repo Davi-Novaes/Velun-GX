@@ -1,0 +1,87 @@
+/* Palco das transmissões (Grade/Destaque) — tiles posicionados por stageLayout.ts, controles sobrepostos ao vídeo */
+
+.workspace .workspace-stage { margin: 0 16px 14px; }
+.stream-stage { position: absolute; inset: 0; overflow: hidden; }
+
+.stage-tile {
+  position: absolute;
+  overflow: hidden;
+  border-radius: 12px;
+  background: #000;
+  color: #f3f4f8;
+  box-shadow: 0 0 0 1px #ffffff0f;
+  isolation: isolate;
+  animation: stage-tile-in .28s ease-out;
+}
+@keyframes stage-tile-in { from { opacity: 0; transform: scale(.97); } }
+/* trocar Grade/Destaque ou o principal desliza os tiles (depois da primeira disposição) */
+.stream-stage.animated .stage-tile {
+  transition: left .32s cubic-bezier(.2, .8, .2, 1), top .32s cubic-bezier(.2, .8, .2, 1), width .32s cubic-bezier(.2, .8, .2, 1), height .32s cubic-bezier(.2, .8, .2, 1), box-shadow .18s ease, border-radius .32s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .stage-tile { animation: none; }
+  .stream-stage.animated .stage-tile { transition: none; }
+}
+
+.stage-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; display: block; }
+.stage-loading { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 10px; color: #9aa3b5; font-size: 12px; }
+
+/* sempre visível: nome e AO VIVO (e o som desligado, quando for o caso) */
+.stage-top { position: absolute; z-index: 2; left: 8px; top: 8px; right: 8px; display: flex; align-items: center; gap: 6px; pointer-events: none; transition: opacity .2s ease; }
+.stage-top > * { pointer-events: auto; }
+.stage-name { max-width: 60%; padding: 4px 8px; border-radius: 7px; background: #0a0b10b8; backdrop-filter: blur(6px); font-size: 12px; font-weight: 600; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stage-name em { font-style: normal; font-weight: 500; color: #b9adff; }
+.stage-tile .stage-live { padding: 3px 6px; border-radius: 5px; background: #d9364bd9; color: #fff; font-size: 9px; font-weight: 700; letter-spacing: .5px; }
+.stage-muted { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; background: #0a0b10b8; color: #ef8a8a; }
+.stage-top .stream-viewers > button { background: #0a0b10b8; border-color: transparent; backdrop-filter: blur(6px); }
+
+/* controles: aparecem ao passar o mouse (toque: ao tocar), com transição suave */
+.stage-controls { z-index: 3; opacity: 0; pointer-events: none; transition: opacity .18s ease; }
+.stage-tile:hover .stage-controls,
+.stage-tile:focus-within .stage-controls,
+.stage-tile.show-controls .stage-controls,
+.stage-tile.is-full:not(.chrome-hidden) .stage-controls { opacity: 1; pointer-events: auto; }
+.stage-actions { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; }
+.stage-actions button { display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 8px; background: #0a0b10b8; color: #e9ebf2; backdrop-filter: blur(6px); cursor: pointer; font-size: 13px; }
+.stage-actions button:hover, .stage-actions button[aria-pressed="true"] { background: #31344a; }
+.stage-bottom { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 8px; padding: 26px 10px 8px; background: linear-gradient(#0000, #000000c4); }
+.stage-audio { display: flex; align-items: center; gap: 6px; margin-right: auto; min-width: 0; }
+.stage-audio button { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 8px; background: transparent; color: #eef0f6; cursor: pointer; }
+.stage-audio button:hover { background: #ffffff1f; }
+.stage-audio input[type="range"] { width: 96px; accent-color: #8b7cf8; }
+.stage-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: #c5cad6; white-space: nowrap; }
+.stage-net, .stage-quality { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border: 0; border-radius: 6px; background: #0a0b1099; color: #aeb6c6; font-size: 11px; white-space: nowrap; cursor: pointer; }
+.stage-quality { min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; display: block; }
+.stage-net.net-good { color: #6fd39a; }
+.stage-net.net-fair { color: #e7bd78; }
+.stage-net.net-poor { color: #ef7a7a; }
+.stage-tile .stream-info-panel { z-index: 6; }
+.stage-error { position: absolute; z-index: 5; left: 10px; right: 10px; bottom: 52px; display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: #3a1f27f0; color: #ffd9de; font-size: 12px; }
+.stage-error button { margin-left: auto; border: 0; background: transparent; color: inherit; font-size: 16px; cursor: pointer; }
+
+/* miniaturas da fileira (destaque): só nome, AO VIVO e som; clique troca o destaque */
+.stage-tile.is-thumb { border-radius: 9px; cursor: pointer; }
+.stage-tile.is-thumb:hover { box-shadow: 0 0 0 2px #8b7cf8; }
+.stage-tile.is-thumb .stage-top { left: 6px; top: auto; bottom: 6px; right: 6px; gap: 4px; }
+.stage-tile.is-thumb .stage-name { font-size: 11px; padding: 3px 6px; max-width: 70%; }
+.stage-tile.is-thumb .stage-live { font-size: 8px; padding: 2px 5px; }
+.stage-tile.is-local { box-shadow: 0 0 0 1px #8b7cf833; }
+.stage-tile.is-main { border-radius: 14px; }
+
+/* tela cheia: só o vídeo até mexer o mouse */
+.stage-tile:fullscreen { border-radius: 0; box-shadow: none; animation: none; }
+.stage-tile.chrome-hidden { cursor: none; }
+.stage-tile.chrome-hidden .stage-top { opacity: 0; pointer-events: none; }
+.stage-tile.chrome-hidden .stage-controls { opacity: 0 !important; pointer-events: none !important; }
+
+/* tiles pequenos (celular, muitas transmissões): menos informação técnica */
+@media (max-width: 700px) {
+  .workspace .workspace-stage { margin: 0 8px 10px; }
+  .stage-quality { display: none; }
+  .stage-audio input[type="range"] { width: 64px; }
+  .stage-actions button { width: 30px; height: 30px; }
+}
+
+/* selo e nome numa linha só: o nome encurta com "…", o AO VIVO nunca quebra */
+.stage-top .stage-live, .stage-top .stage-muted, .stage-top .stream-viewers { flex: none; white-space: nowrap; }
+.stage-top .stage-name { min-width: 0; flex: 0 1 auto; }

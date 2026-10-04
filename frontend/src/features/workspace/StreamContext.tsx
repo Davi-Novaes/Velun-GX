@@ -10,6 +10,12 @@ export function StreamAudio({ share, client }: { share: ShareView; client: LiveK
   const { audio } = useStreamContext()
   const preference = audio[share.id] ?? { muted: false, volume: 0.8 }
   useEffect(() => { if (ref.current && share.audioReady) return client.attachShareAudio(share.id, ref.current) }, [client, share.id, share.audioReady, share.audioTrackVersion])
-  useEffect(() => { if (ref.current) ref.current.volume = preference.volume }, [preference.volume])
+  // mudo/volume aplicados DEPOIS de ligar a faixa: ligar a faixa no elemento pode desfazer o mudo inicial
+  // (ex.: ao recarregar a página com a pessoa já lembrada como mutada)
+  useEffect(() => {
+    if (!ref.current) return
+    ref.current.volume = preference.volume
+    ref.current.muted = preference.muted
+  }, [preference.volume, preference.muted, share.audioReady, share.audioTrackVersion])
   return <audio ref={ref} autoPlay muted={preference.muted} aria-label={`Áudio de ${share.ownerName}`} />
 }

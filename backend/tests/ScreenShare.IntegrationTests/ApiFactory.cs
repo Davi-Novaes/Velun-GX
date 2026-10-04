@@ -24,6 +24,17 @@ public sealed class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
     public const string LiveKitKey = "test-key";
     public const string LiveKitSecret = "test-livekit-secret-with-32-characters!";
+    public const string AdminUsername = "chefe";
+    public const string AdminPassword = "senha-do-painel-de-teste";
+    /// <summary>Mesmo formato que o script set-admin.sh grava no servidor (pbkdf2-sha256:iterações:sal:hash).</summary>
+    public static readonly string AdminPasswordHash = HashAdminPassword(AdminPassword);
+
+    public static string HashAdminPassword(string password)
+    {
+        var salt = System.Security.Cryptography.RandomNumberGenerator.GetBytes(16);
+        var hash = System.Security.Cryptography.Rfc2898DeriveBytes.Pbkdf2(System.Text.Encoding.UTF8.GetBytes(password), salt, 100_000, System.Security.Cryptography.HashAlgorithmName.SHA256, 32);
+        return $"pbkdf2-sha256:100000:{Convert.ToBase64String(salt)}:{Convert.ToBase64String(hash)}";
+    }
 
     private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:18.6-alpine").Build();
     private readonly RedisContainer _redis = new RedisBuilder("redis:8.10.2-alpine").Build();
@@ -54,6 +65,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         builder.UseSetting("LiveKit:ApiSecret", LiveKitSecret);
         builder.UseSetting("Session:SigningKey", "test-session-signing-key-with-32-chars!!");
         builder.UseSetting("Session:SecureCookie", "false");
+        builder.UseSetting("Admin:Username", AdminUsername);
+        builder.UseSetting("Admin:PasswordHash", AdminPasswordHash);
         // limites por IP altos: todos os testes compartilham o mesmo "IP"
         builder.UseSetting("RateLimits:sessions:Limit", "100000");
         builder.UseSetting("RateLimits:rooms-create-ip:Limit", "100000");

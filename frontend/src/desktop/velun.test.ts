@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { PCM_WORKLET, velunBridge } from './velun'
+import { PCM_WORKLET, mutesOtherStreams, velunBridge } from './velun'
 
 interface Processor {
   port: { onmessage: (event: { data: ArrayBuffer }) => void }
@@ -30,6 +30,13 @@ function render(processor: Processor): Float32Array[] {
 describe('Velun Gx', () => {
   afterEach(() => { delete (window as unknown as { velun?: unknown }).velun })
 
+  it('com o som do PC sem o app (0.2.6+) você continua ouvindo os outros; só o modo reserva silencia', () => {
+    expect(mutesOtherStreams('exclude-discord-and-app')).toBe(false)
+    expect(mutesOtherStreams('window-app')).toBe(false)
+    expect(mutesOtherStreams(undefined)).toBe(false)
+    expect(mutesOtherStreams('exclude-discord')).toBe(true)
+  })
+
   it('só ativa a integração dentro do app', () => {
     expect(velunBridge()).toBeNull()
     ;(window as unknown as { velun: unknown }).velun = { app: 'Velun Gx' }
@@ -58,5 +65,11 @@ describe('Velun Gx', () => {
     for (let i = 0; i < 16; i++) render(processor) // consome tudo
     processor.port.onmessage({ data: pcm(500, 1000) })
     expect(render(processor)[0]![0]).toBe(0)
+  })
+})
+
+describe('Windows 10 no app', () => {
+  it('som do PC inteiro silencia as outras transmissões para quem transmite (senão vira eco)', () => {
+    expect(mutesOtherStreams('system-loopback')).toBe(true)
   })
 })
